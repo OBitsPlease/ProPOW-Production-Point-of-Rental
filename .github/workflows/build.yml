@@ -1,0 +1,114 @@
+name: Build Truck Pack
+
+on:
+  push:
+    tags:
+      - 'v*'           # Runs when you push a tag like v1.0.0
+  workflow_dispatch:   # Also lets you trigger it manually from GitHub UI
+
+jobs:
+  build-mac:
+    name: Build macOS
+    runs-on: macos-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build Vite renderer
+        run: npx vite build
+
+      - name: Build Electron app (macOS)
+        run: npx electron-builder --mac --publish never
+        env:
+          # Skip code signing — app will work but macOS will warn first launch
+          CSC_IDENTITY_AUTO_DISCOVERY: false
+
+      - name: Upload macOS artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: TruckPack-macOS
+          path: |
+            dist-electron/*.dmg
+            dist-electron/*.zip
+          retention-days: 30
+
+  build-windows:
+    name: Build Windows
+    runs-on: windows-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build Vite renderer
+        run: npx vite build
+
+      - name: Build Electron app (Windows)
+        run: npx electron-builder --win --publish never
+
+      - name: Upload Windows artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: TruckPack-Windows
+          path: dist-electron/*.exe
+          retention-days: 30
+
+  # Optional: auto-create a GitHub Release when you push a v* tag
+  release:
+    name: Create GitHub Release
+    needs: [build-mac, build-windows]
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+    permissions:
+      contents: write
+    steps:
+      - name: Download macOS build
+        uses: actions/download-artifact@v4
+        with:
+          name: TruckPack-macOS
+          path: release/mac
+
+      - name: Download Windows build
+        uses: actions/download-artifact@v4
+        with:
+          name: TruckPack-Windows
+          path: release/win
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: Truck Pack ${{ github.ref_name }}
+          draft: false
+          prerelease: false
+          files: |
+            release/mac/*.dmg
+            release/mac/*.zip
+            release/win/*.exe
+          body: |
+            ## Truck Pack ${{ github.ref_name }}
+
+            ### Download
+            | Platform | File |
+            |----------|------|
+            | macOS | `.dmg` — drag to Applications |
+            | Windows | `.exe` — run installer |
+
+            ### First Launch Note (macOS)
+            Right-click the app → Open, then click Open to bypass Gatekeeper the first time.

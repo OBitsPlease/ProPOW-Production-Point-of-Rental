@@ -1,0 +1,68 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  * { box-sizing: border-box; }
+  body {
+    @apply bg-dark-900 text-gray-100 font-sans;
+    margin: 0;
+    overflow: hidden;
+    user-select: none;
+  }
+  input, textarea, select {
+    user-select: text;
+  }
+  ::-webkit-scrollbar { width: 6px; height: 6px; }
+  ::-webkit-scrollbar-track { @apply bg-dark-800; }
+  ::-webkit-scrollbar-thumb { @apply bg-dark-400 rounded-full; }
+  ::-webkit-scrollbar-thumb:hover { @apply bg-dark-300; }
+}
+
+@layer components {
+  .btn-primary {
+    @apply bg-brand-primary hover:bg-blue-500 text-white font-medium px-4 py-2 rounded-lg transition-colors flex items-center gap-2 text-sm;
+  }
+  .btn-secondary {
+    @apply bg-dark-500 hover:bg-dark-400 text-gray-200 font-medium px-4 py-2 rounded-lg transition-colors flex items-center gap-2 text-sm border border-dark-400;
+  }
+  .btn-danger {
+    @apply bg-red-900/40 hover:bg-red-800/60 text-red-300 font-medium px-4 py-2 rounded-lg transition-colors flex items-center gap-2 text-sm border border-red-800/40;
+  }
+  .card {
+    @apply bg-dark-700 border border-dark-500 rounded-xl p-4;
+  }
+  .input-field {
+    @apply bg-dark-600 border border-dark-400 text-gray-100 rounded-lg px-3 py-2 text-sm w-full focus:outline-none focus:border-brand-primary transition-colors;
+  }
+  .label {
+    @apply text-gray-400 text-xs font-medium mb-1 block;
+  }
+  .table-header {
+    @apply bg-dark-600 text-gray-400 text-xs uppercase tracking-wider px-4 py-3 text-left;
+  }
+  .table-row {
+    @apply border-b border-dark-600 hover:bg-dark-600/50 transition-colors;
+  }
+  .table-cell {
+    @apply px-4 py-3 text-sm text-gray-200;
+  }
+}
+
+/* Title bar drag region for macOS */
+.titlebar-drag {
+  -webkit-app-region: drag;
+}
+.titlebar-no-drag {
+  -webkit-app-region: no-drag;
+}
+
+/* 3D canvas fill */
+.canvas-container {
+  position: relative;
+  width: 100%;
+  height: 100%;
+}
+canvas {
+  display: block;
+}
