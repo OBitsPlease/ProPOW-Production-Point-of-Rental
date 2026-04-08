@@ -32,7 +32,7 @@
       ]
     },
     "win": {
-      "icon": "assets/installer/icon.ico",
+      "icon": "assets/installer/icon.png",
       "target": [
         "nsis"
       ]
