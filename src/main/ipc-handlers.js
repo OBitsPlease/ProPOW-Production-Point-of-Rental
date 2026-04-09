@@ -164,7 +164,7 @@ function registerIpcHandlers(ipcMain, dialog, shell, win) {
     const XLSX = require('xlsx')
     const wb = XLSX.readFile(filePaths[0])
     const ws = wb.Sheets[wb.SheetNames[0]]
-    return XLSX.utils.sheet_to_json(ws, { defval: '' })
+    return sheetToJsonSkipBlanks(ws)
   })
 
   ipcMain.handle('import:inventory', async () => {
@@ -276,6 +276,34 @@ function registerIpcHandlers(ipcMain, dialog, shell, win) {
   })
 }
 
+/**
+ * Like XLSX.utils.sheet_to_json but skips any leading blank rows so that
+ * spreadsheets exported from Numbers (which inserts an empty row 1) still
+ * parse correctly. It finds the first row that has at least one non-empty
+ * cell and treats that as the header row.
+ */
+function sheetToJsonSkipBlanks(ws) {
+  const XLSX = require('xlsx')
+  const range = XLSX.utils.decode_range(ws['!ref'] || 'A1')
+  // Find the first row index that has at least one non-empty cell
+  let headerRow = range.s.r
+  for (let r = range.s.r; r <= range.e.r; r++) {
+    let hasValue = false
+    for (let c = range.s.c; c <= range.e.c; c++) {
+      const cell = ws[XLSX.utils.encode_cell({ r, c })]
+      if (cell && cell.v !== undefined && String(cell.v).trim() !== '') {
+        hasValue = true
+        break
+      }
+    }
+    if (hasValue) { headerRow = r; break }
+  }
+  // Rebuild a trimmed range starting from the found header row
+  const newRange = { s: { r: headerRow, c: range.s.c }, e: range.e }
+  const trimmedWs = Object.assign({}, ws, { '!ref': XLSX.utils.encode_range(newRange) })
+  return XLSX.utils.sheet_to_json(trimmedWs, { defval: '' })
+}
+
 function parseInventoryFile(filePath) {
   const ext = path.extname(filePath).toLowerCase()
   try {
@@ -283,7 +311,7 @@ function parseInventoryFile(filePath) {
     if (ext === '.csv') {
       const XLSX = require('xlsx')
       const wb = XLSX.readFile(filePath)
-      return XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { defval: '' })
+      return sheetToJsonSkipBlanks(wb.Sheets[wb.SheetNames[0]])
     }
   } catch (e) {
     return { error: e.message }

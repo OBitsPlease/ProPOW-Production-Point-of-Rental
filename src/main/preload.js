@@ -1,6 +1,8 @@
 const { contextBridge, ipcRenderer } = require('electron')
 
 contextBridge.exposeInMainWorld('electronAPI', {
+  // App info
+  getVersion: () => ipcRenderer.sendSync('app:getVersion'),
   // Trucks
   getTrucks: () => ipcRenderer.invoke('trucks:getAll'),
   saveTruck: (truck) => ipcRenderer.invoke('trucks:save', truck),
@@ -57,5 +59,23 @@ contextBridge.exposeInMainWorld('electronAPI', {
     saveAs: (data) => ipcRenderer.invoke('file:saveAs', data),
     open: () => ipcRenderer.invoke('file:open'),
     openFolder: () => ipcRenderer.invoke('file:openFolder'),
+  },
+  updater: {
+    check: () => ipcRenderer.invoke('updater:check'),
+    download: () => ipcRenderer.invoke('updater:download'),
+    install: () => ipcRenderer.invoke('updater:install'),
+    startAutoCheck: () => ipcRenderer.invoke('updater:startAutoCheck'),
+    onUpdateAvailable: (cb) => ipcRenderer.on('updater:update-available', (_, info) => cb(info)),
+    onNotAvailable: (cb) => ipcRenderer.on('updater:not-available', () => cb()),
+    onProgress: (cb) => ipcRenderer.on('updater:progress', (_, p) => cb(p)),
+    onDownloaded: (cb) => ipcRenderer.on('updater:downloaded', (_, info) => cb(info)),
+    onError: (cb) => ipcRenderer.on('updater:error', (_, msg) => cb(msg)),
+    removeListeners: () => {
+      ipcRenderer.removeAllListeners('updater:update-available')
+      ipcRenderer.removeAllListeners('updater:not-available')
+      ipcRenderer.removeAllListeners('updater:progress')
+      ipcRenderer.removeAllListeners('updater:downloaded')
+      ipcRenderer.removeAllListeners('updater:error')
+    },
   },
 })

@@ -20,6 +20,9 @@ export default function Items() {
   const [form, setForm] = useState(DEFAULT_ITEM)
   const [importModal, setImportModal] = useState(null) // { rows, columns, mapping }
   const [search, setSearch] = useState('')
+  const [selected, setSelected] = useState(new Set()) // ids of selected items
+  const [batchModal, setBatchModal] = useState(false)
+  const [batchForm, setBatchForm] = useState({}) // partial fields to apply
 
   const load = async () => {
     if (!window.electronAPI) return
@@ -93,6 +96,42 @@ export default function Items() {
     load()
   }
 
+  // Selection helpers
+  const toggleSelect = (id) => setSelected(s => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n })
+  const toggleSelectAll = () => {
+    if (selected.size === filtered.length) setSelected(new Set())
+    else setSelected(new Set(filtered.map(i => i.id)))
+  }
+  const clearSelection = () => setSelected(new Set())
+
+  const openBatchEdit = () => {
+    setBatchForm({
+      department_id: '',
+      can_rotate_lr: '',
+      can_tip_side: '',
+      can_flip: '',
+      can_stack_on_others: '',
+      allow_stacking_on_top: '',
+      max_stack_weight: '',
+    })
+    setBatchModal(true)
+  }
+
+  const confirmBatchEdit = async () => {
+    const updates = {}
+    for (const [k, v] of Object.entries(batchForm)) {
+      if (v !== '') updates[k] = v === 'true' ? 1 : v === 'false' ? 0 : v
+    }
+    if (Object.keys(updates).length === 0) { setBatchModal(false); return }
+    for (const id of selected) {
+      const item = items.find(i => i.id === id)
+      if (item) await window.electronAPI.saveItem({ ...item, ...updates })
+    }
+    setBatchModal(false)
+    clearSelection()
+    load()
+  }
+
   const filtered = items.filter(i =>
     i.name.toLowerCase().includes(search.toLowerCase()) ||
     (i.sku || '').toLowerCase().includes(search.toLowerCase()) ||
@@ -116,6 +155,11 @@ export default function Items() {
           {items.length > 0 && (
             <button onClick={clearAll} className="btn-danger">
               <Trash size={14} /> Clear All
+            </button>
+          )}
+          {selected.size > 0 && (
+            <button onClick={openBatchEdit} className="btn-secondary">
+              <Pencil size={14} /> Edit {selected.size} Selected
             </button>
           )}
           <button onClick={openNew} className="btn-primary">
@@ -181,8 +225,7 @@ export default function Items() {
                     { key: 'can_rotate_lr',        label: 'Can rotate left/right',          hint: 'Swap length ↔ width' },
                     { key: 'can_tip_side',          label: 'Can tip on side',                hint: 'Swap width ↔ height' },
                     { key: 'can_flip',              label: 'Can flip upside down',           hint: '180° pitch rotation' },
-                    { key: 'can_stack_on_others',   label: 'Can be stacked on other cases',  hint: 'This case can sit on top' },
-                    { key: 'allow_stacking_on_top', label: 'Allow stacking on top',          hint: 'Other cases can rest on this' },
+                    { key: 'can_stack_on_others', label: 'This case can be stacked on others', hint: 'Allow this case to sit on top of other cases' },
                   ].map(({ key, label, hint }) => (
                     <label key={key} className="flex items-center justify-between p-2 rounded-lg bg-gray-800 cursor-pointer hover:bg-gray-750">
                       <div>
@@ -196,16 +239,35 @@ export default function Items() {
                       />
                     </label>
                   ))}
-                  {/* Max stack weight */}
-                  <div className="flex items-center justify-between p-2 rounded-lg bg-gray-800">
-                    <div>
-                      <span className="text-sm text-white">Max weight on top (lbs)</span>
-                      <span className="text-xs text-gray-500 ml-2">0 = unlimited</span>
-                    </div>
-                    <input type="number" min="0" className="w-24 px-2 py-1 bg-gray-700 border border-gray-600 rounded text-sm text-white text-right"
-                      value={form.max_stack_weight || 0}
-                      onChange={e => setForm(f => ({ ...f, max_stack_weight: parseFloat(e.target.value) || 0 }))}
-                    />
+                  {/* Do Not Stack / weight limit — visually grouped together */}
+                  <div className={`p-2 rounded-lg border ${
+                    !form.allow_stacking_on_top
+                      ? 'bg-red-500/10 border-red-500/40'
+                      : 'bg-gray-800 border-transparent'
+                  }`}>
+                    <label className="flex items-center justify-between cursor-pointer">
+                      <div>
+                        <span className="text-sm text-white font-medium">Allow stacking on top of this case</span>
+                        <span className="text-xs text-gray-500 ml-2">Uncheck = DO NOT STACK (no cases placed on top)</span>
+                      </div>
+                      <input type="checkbox"
+                        className="w-4 h-4 accent-blue-500"
+                        checked={!!form.allow_stacking_on_top}
+                        onChange={e => setForm(f => ({ ...f, allow_stacking_on_top: e.target.checked ? 1 : 0 }))}
+                      />
+                    </label>
+                    {!!form.allow_stacking_on_top && (
+                      <div className="flex items-center justify-between mt-2 pt-2 border-t border-gray-700">
+                        <div>
+                          <span className="text-sm text-white">Max weight allowed on top</span>
+                          <span className="text-xs text-gray-500 ml-2">lbs — enter 0 for no limit</span>
+                        </div>
+                        <input type="number" min="0" className="w-24 px-2 py-1 bg-gray-700 border border-gray-600 rounded text-sm text-white text-right"
+                          value={form.max_stack_weight || 0}
+                          onChange={e => setForm(f => ({ ...f, max_stack_weight: parseFloat(e.target.value) || 0 }))}
+                        />
+                      </div>
+                    )}
                   </div>
                 </div>
               </div>
@@ -287,19 +349,30 @@ export default function Items() {
           <table className="w-full">
             <thead>
               <tr>
+                <th className="table-header w-8">
+                  <input type="checkbox" className="w-4 h-4 accent-blue-500"
+                    checked={filtered.length > 0 && selected.size === filtered.length}
+                    onChange={toggleSelectAll} />
+                </th>
                 <th className="table-header">Name</th>
                 <th className="table-header">SKU</th>
                 <th className="table-header">Dept</th>
                 <th className="table-header">L × W × H (in)</th>
                 <th className="table-header">Weight</th>
                 <th className="table-header">Qty</th>
+                <th className="table-header">Stacking</th>
                 <th className="table-header">Restrictions</th>
                 <th className="table-header"></th>
               </tr>
             </thead>
             <tbody>
               {filtered.map(item => (
-                <tr key={item.id} className="table-row">
+                <tr key={item.id} className={`table-row ${selected.has(item.id) ? 'bg-blue-500/10' : ''}`}>
+                  <td className="table-cell">
+                    <input type="checkbox" className="w-4 h-4 accent-blue-500"
+                      checked={selected.has(item.id)}
+                      onChange={() => toggleSelect(item.id)} />
+                  </td>
                   <td className="table-cell font-medium text-white">{item.name}</td>
                   <td className="table-cell text-gray-400 font-mono text-xs">{item.sku || '—'}</td>
                   <td className="table-cell">
@@ -313,6 +386,19 @@ export default function Items() {
                   <td className="table-cell font-mono text-sm">{item.length} × {item.width} × {item.height}</td>
                   <td className="table-cell text-gray-400">{item.weight} lbs</td>
                   <td className="table-cell text-center font-semibold">{item.quantity}</td>
+                  <td className="table-cell">
+                    {(item.allow_stacking_on_top === 0 || item.allow_stacking_on_top === false) ? (
+                      <span className="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-semibold bg-red-500/20 text-red-400 border border-red-500/30">
+                        No Stack
+                      </span>
+                    ) : item.max_stack_weight > 0 ? (
+                      <span className="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-semibold bg-amber-500/20 text-amber-400 border border-amber-500/30">
+                        ≤ {item.max_stack_weight} lbs
+                      </span>
+                    ) : (
+                      <span className="text-gray-600 text-xs">—</span>
+                    )}
+                  </td>
                   <td className="table-cell">
                     {hasRestrictions(item) ? (
                       <span className="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-semibold bg-orange-500/20 text-orange-400 border border-orange-500/30">
@@ -332,6 +418,83 @@ export default function Items() {
               ))}
             </tbody>
           </table>
+        </div>
+      )}
+
+      {/* Batch Edit Modal */}
+      {batchModal && (
+        <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4">
+          <div className="bg-dark-700 border border-dark-500 rounded-xl w-full max-w-lg shadow-2xl">
+            <div className="flex items-center justify-between px-5 py-4 border-b border-dark-500">
+              <h2 className="font-semibold text-white">Batch Edit — {selected.size} Items</h2>
+              <button onClick={() => setBatchModal(false)} className="text-gray-400 hover:text-white"><X size={18} /></button>
+            </div>
+            <div className="p-5 space-y-4">
+              <p className="text-gray-400 text-sm">Only fields you change here will be updated. Blank = keep each item's current value.</p>
+
+              {/* Department */}
+              <div>
+                <label className="label">Department</label>
+                <select className="input-field"
+                  value={batchForm.department_id}
+                  onChange={e => setBatchForm(f => ({ ...f, department_id: e.target.value }))}>
+                  <option value="">— no change —</option>
+                  <option value="null">Clear department</option>
+                  {depts.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
+                </select>
+              </div>
+
+              {/* Placement restrictions */}
+              <div className="border-t border-gray-700 pt-4">
+                <h4 className="text-sm font-semibold text-gray-300 mb-3">Placement Restrictions</h4>
+                <div className="grid grid-cols-1 gap-2">
+                  {[
+                    { key: 'can_rotate_lr',      label: 'Can rotate left/right' },
+                    { key: 'can_tip_side',        label: 'Can tip on side' },
+                    { key: 'can_flip',            label: 'Can flip upside down' },
+                    { key: 'can_stack_on_others', label: 'This case can be stacked on others' },
+                  ].map(({ key, label }) => (
+                    <div key={key} className="flex items-center justify-between p-2 rounded-lg bg-gray-800">
+                      <span className="text-sm text-white">{label}</span>
+                      <select className="bg-gray-700 border border-gray-600 rounded text-sm text-white px-2 py-1"
+                        value={batchForm[key]}
+                        onChange={e => setBatchForm(f => ({ ...f, [key]: e.target.value }))}>
+                        <option value="">— no change —</option>
+                        <option value="true">Yes (allowed)</option>
+                        <option value="false">No (restricted)</option>
+                      </select>
+                    </div>
+                  ))}
+
+                  {/* No stack / weight limit */}
+                  <div className="flex items-center justify-between p-2 rounded-lg bg-gray-800">
+                    <span className="text-sm text-white">Allow stacking on top</span>
+                    <select className="bg-gray-700 border border-gray-600 rounded text-sm text-white px-2 py-1"
+                      value={batchForm.allow_stacking_on_top}
+                      onChange={e => setBatchForm(f => ({ ...f, allow_stacking_on_top: e.target.value }))}>
+                      <option value="">— no change —</option>
+                      <option value="true">Yes (allowed)</option>
+                      <option value="false">NO STACK</option>
+                    </select>
+                  </div>
+                  <div className="flex items-center justify-between p-2 rounded-lg bg-gray-800">
+                    <div>
+                      <span className="text-sm text-white">Max weight on top (lbs)</span>
+                      <span className="text-xs text-gray-500 ml-2">0 = unlimited, blank = no change</span>
+                    </div>
+                    <input type="number" min="0" placeholder="—"
+                      className="w-24 px-2 py-1 bg-gray-700 border border-gray-600 rounded text-sm text-white text-right"
+                      value={batchForm.max_stack_weight}
+                      onChange={e => setBatchForm(f => ({ ...f, max_stack_weight: e.target.value }))} />
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div className="flex items-center justify-end gap-2 px-5 py-4 border-t border-dark-500">
+              <button onClick={() => setBatchModal(false)} className="btn-secondary">Cancel</button>
+              <button onClick={confirmBatchEdit} className="btn-primary"><Check size={14} /> Apply to {selected.size} Items</button>
+            </div>
+          </div>
         </div>
       )}
     </div>

@@ -1,6 +1,7 @@
 const { app, BrowserWindow, ipcMain, dialog, shell } = require('electron')
 const path = require('path')
 const http = require('http')
+const { autoUpdater } = require('electron-updater')
 const { setupDatabase } = require('./db')
 const { registerIpcHandlers } = require('./ipc-handlers')
 
@@ -50,7 +51,64 @@ async function createWindow() {
 app.whenReady().then(() => {
   setupDatabase()
   registerIpcHandlers(ipcMain, dialog, shell, mainWindow)
+
+  // Sync handler: renderer can request the app version
+  ipcMain.on('app:getVersion', (e) => { e.returnValue = app.getVersion() })
+
   createWindow()
+
+  // Auto-updater setup (runs after window is created)
+  autoUpdater.autoDownload = false
+  autoUpdater.autoInstallOnAppQuit = true
+  autoUpdater.logger = null // silence to avoid noise in prod
+
+  autoUpdater.on('update-available', (info) => {
+    if (mainWindow) mainWindow.webContents.send('updater:update-available', info)
+  })
+  autoUpdater.on('update-not-available', () => {
+    if (mainWindow) mainWindow.webContents.send('updater:not-available')
+  })
+  autoUpdater.on('download-progress', (progress) => {
+    if (mainWindow) mainWindow.webContents.send('updater:progress', progress)
+  })
+  autoUpdater.on('update-downloaded', (info) => {
+    if (mainWindow) mainWindow.webContents.send('updater:downloaded', info)
+  })
+  autoUpdater.on('error', (err) => {
+    if (mainWindow) mainWindow.webContents.send('updater:error', err.message)
+  })
+
+  // IPC: manual check
+  ipcMain.handle('updater:check', async () => {
+    try {
+      await autoUpdater.checkForUpdates()
+    } catch (e) {
+      if (mainWindow) mainWindow.webContents.send('updater:error', e.message)
+    }
+  })
+
+  // IPC: download update
+  ipcMain.handle('updater:download', async () => {
+    try {
+      await autoUpdater.downloadUpdate()
+    } catch (e) {
+      if (mainWindow) mainWindow.webContents.send('updater:error', e.message)
+    }
+  })
+
+  // IPC: quit and install
+  ipcMain.handle('updater:install', () => {
+    autoUpdater.quitAndInstall()
+  })
+
+  // Auto-check on startup (renderer tells us whether auto-update is enabled)
+  ipcMain.handle('updater:startAutoCheck', async () => {
+    try {
+      await autoUpdater.checkForUpdates()
+    } catch {
+      // Silently ignore auto-check failures
+    }
+  })
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()

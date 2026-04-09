@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Settings as SettingsIcon, Save, FolderOpen, Trash2, AlertTriangle } from 'lucide-react'
+import { Settings as SettingsIcon, Save, FolderOpen, Trash2, AlertTriangle, RefreshCw, Download, CheckCircle } from 'lucide-react'
 
 function useLocalStorage(key, defaultValue) {
   const [value, setValue] = useState(() => {
@@ -72,6 +72,12 @@ export default function Settings() {
   // Inventory Integration
   const [watchFolder, setWatchFolderState] = useState(null)
 
+  // Updates
+  const [autoUpdate, setAutoUpdate] = useLocalStorage('tp_auto_update', true)
+  const [updateStatus, setUpdateStatus] = useState('idle') // idle | checking | available | downloading | downloaded | error | up-to-date
+  const [updateInfo, setUpdateInfo] = useState(null)
+  const [downloadProgress, setDownloadProgress] = useState(0)
+
   // Clear All Data
   const [confirmClear, setConfirmClear] = useState(false)
 
@@ -92,6 +98,19 @@ export default function Settings() {
     loadDepts()
     loadFolder()
   }, [])
+
+  // Updater listeners + auto-check on mount
+  useEffect(() => {
+    if (!window.electronAPI?.updater) return
+    const u = window.electronAPI.updater
+    u.onUpdateAvailable((info) => { setUpdateStatus('available'); setUpdateInfo(info) })
+    u.onNotAvailable(() => setUpdateStatus('up-to-date'))
+    u.onProgress((p) => { setUpdateStatus('downloading'); setDownloadProgress(Math.round(p.percent)) })
+    u.onDownloaded((info) => { setUpdateStatus('downloaded'); setUpdateInfo(info) })
+    u.onError((msg) => { setUpdateStatus('error'); setUpdateInfo({ message: msg }) })
+    if (autoUpdate) u.startAutoCheck()
+    return () => u.removeListeners()
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   const saveDeptColor = async (dept) => {
     if (!window.electronAPI) return
@@ -281,11 +300,90 @@ export default function Settings() {
         </p>
       </SectionCard>
 
+      {/* Updates */}
+      <SectionCard title="Updates">
+        <Toggle
+          label="Automatically check for updates"
+          description="Check for new versions when the app launches"
+          checked={autoUpdate}
+          onChange={setAutoUpdate}
+        />
+        <div className="border-t border-gray-800 my-3" />
+        <div className="flex items-center justify-between">
+          <div className="flex-1 min-w-0 mr-4">
+            {updateStatus === 'idle' && (
+              <p className="text-xs text-gray-500">Click "Check Now" to look for updates.</p>
+            )}
+            {updateStatus === 'checking' && (
+              <p className="text-xs text-blue-400">Checking for updates…</p>
+            )}
+            {updateStatus === 'up-to-date' && (
+              <div className="flex items-center gap-1.5">
+                <CheckCircle size={13} className="text-green-400 shrink-0" />
+                <p className="text-xs text-green-400">You're on the latest version.</p>
+              </div>
+            )}
+            {updateStatus === 'available' && updateInfo && (
+              <div>
+                <p className="text-xs text-blue-300 font-medium">Update available: v{updateInfo.version}</p>
+                <p className="text-xs text-gray-500 mt-0.5">Click Download to get the latest version.</p>
+              </div>
+            )}
+            {updateStatus === 'downloading' && (
+              <div>
+                <p className="text-xs text-blue-400 mb-1">Downloading… {downloadProgress}%</p>
+                <div className="w-full bg-gray-700 rounded-full h-1.5">
+                  <div className="bg-blue-500 h-1.5 rounded-full transition-all" style={{ width: `${downloadProgress}%` }} />
+                </div>
+              </div>
+            )}
+            {updateStatus === 'downloaded' && updateInfo && (
+              <div>
+                <p className="text-xs text-green-300 font-medium">v{updateInfo.version} ready to install.</p>
+                <p className="text-xs text-gray-500 mt-0.5">Restart the app to apply the update.</p>
+              </div>
+            )}
+            {updateStatus === 'error' && (
+              <p className="text-xs text-red-400">Update check failed. Check your connection and try again.</p>
+            )}
+          </div>
+          <div className="flex gap-2 shrink-0">
+            {updateStatus === 'available' && (
+              <button
+                onClick={() => { setUpdateStatus('downloading'); window.electronAPI.updater.download() }}
+                className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white text-xs font-medium rounded-lg transition-colors"
+              >
+                <Download size={13} />
+                Download
+              </button>
+            )}
+            {updateStatus === 'downloaded' && (
+              <button
+                onClick={() => window.electronAPI.updater.install()}
+                className="flex items-center gap-1.5 px-3 py-1.5 bg-green-600 hover:bg-green-700 text-white text-xs font-medium rounded-lg transition-colors"
+              >
+                <Download size={13} />
+                Restart &amp; Install
+              </button>
+            )}
+            {(updateStatus === 'idle' || updateStatus === 'up-to-date' || updateStatus === 'error') && (
+              <button
+                onClick={() => { setUpdateStatus('checking'); window.electronAPI?.updater?.check() }}
+                className="flex items-center gap-1.5 px-3 py-1.5 bg-gray-700 hover:bg-gray-600 text-gray-200 text-xs font-medium rounded-lg transition-colors"
+              >
+                <RefreshCw size={13} />
+                Check Now
+              </button>
+            )}
+          </div>
+        </div>
+      </SectionCard>
+
       {/* Application */}
       <SectionCard title="Application">
         <div className="flex items-center justify-between py-2 border-b border-gray-800 mb-4">
           <span className="text-sm text-gray-400">App Version</span>
-          <span className="text-sm font-mono text-gray-300">v1.0.0</span>
+          <span className="text-sm font-mono text-gray-300">v{window.electronAPI?.getVersion?.() ?? '1.1.0'}</span>
         </div>
 
         {!confirmClear ? (

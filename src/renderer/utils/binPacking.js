@@ -30,6 +30,20 @@ const PERM_DEFS = [
   { fn: (L, W, H) => [H, L, W], needLR: true,  needTip: true  }, // yaw + tip (alt)
 ]
 
+/**
+ * Two items are "similar" if they share the same SKU, the same name,
+ * or identical sorted base dimensions (within 0.5" tolerance).
+ * Used to prefer stacking like-cases together before mixing.
+ */
+function isSimilar(a, b) {
+  if (!a || !b) return false
+  if (a.sku && b.sku && a.sku === b.sku) return true
+  if (a.name && b.name && a.name === b.name) return true
+  const dims = (item) => [item.length, item.width, item.height].sort((x, y) => x - y)
+  const da = dims(a), db = dims(b)
+  return da.every((v, i) => Math.abs(v - db[i]) < 0.5)
+}
+
 function getOrientations(item) {
   const L = item.length, W = item.width, H = item.height
   const canLR  = item.can_rotate_lr  !== 0 && item.can_rotate_lr  !== false
@@ -52,11 +66,14 @@ function getOrientations(item) {
   return result
 }
 
+// Last DOOR_CLEARANCE_IN inches at the loading door are kept clear.
+const DOOR_CLEARANCE_IN = 12
+
 function fitsInTruck(px, py, pz, bl, bw, bh, truck) {
   const eps = 0.001
   return (
     px >= -eps && py >= -eps && pz >= -eps &&
-    px + bl <= truck.length + eps &&
+    px + bl <= truck.length - DOOR_CLEARANCE_IN + eps &&
     py + bw <= truck.width  + eps &&
     pz + bh <= truck.height + eps
   )
@@ -123,70 +140,107 @@ export function runBinPacking(items, truck) {
   const units = []
   for (const item of items) {
     const qty = item.quantity || 1
-    for (let i = 0; i < qty; i++) {
-      units.push({ ...item, unitIndex: i })
-    }
+    for (let i = 0; i < qty; i++) units.push({ ...item, unitIndex: i })
   }
 
-  // Sort: floor-only items first (can_stack_on_others=false), then largest volume, then heaviest
+  // Count how many units exist per similarity group.
+  // Groups with more duplicates sort first — they are the best stacking candidates.
+  const simKey = (u) => u.sku || `${u.name}|${Math.round(u.length)}|${Math.round(u.width)}|${Math.round(u.height)}`
+  const groupSize = new Map()
+  for (const u of units) {
+    const k = simKey(u)
+    groupSize.set(k, (groupSize.get(k) || 0) + 1)
+  }
+
   units.sort((a, b) => {
-    const aFloorOnly = (a.can_stack_on_others === 0 || a.can_stack_on_others === false) ? 0 : 1
-    const bFloorOnly = (b.can_stack_on_others === 0 || b.can_stack_on_others === false) ? 0 : 1
-    if (aFloorOnly !== bFloorOnly) return aFloorOnly - bFloorOnly
-    const volDiff = (b.length * b.width * b.height) - (a.length * a.width * a.height)
-    if (Math.abs(volDiff) > 0.01) return volDiff
-    return (b.weight || 0) - (a.weight || 0)
+    // 1. Tallest first — tall cases go deepest into the cab end
+    const aH = Math.max(a.length, a.width, a.height)
+    const bH = Math.max(b.length, b.width, b.height)
+    if (Math.abs(bH - aH) > 0.5) return bH - aH
+    // 2. Heaviest first within same height tier
+    if (Math.abs((b.weight || 0) - (a.weight || 0)) > 0.5) return (b.weight || 0) - (a.weight || 0)
+    // 3. Larger duplicate groups first — more stacking opportunity
+    const aSz = groupSize.get(simKey(a)) || 1
+    const bSz = groupSize.get(simKey(b)) || 1
+    if (bSz !== aSz) return bSz - aSz
+    // 4. Keep like-cases consecutive so they naturally stack together
+    const ak = simKey(a), bk = simKey(b)
+    if (ak !== bk) return ak.localeCompare(bk)
+    return 0
   })
 
   const truckVol = truck.length * truck.width * truck.height
   const maxTruckWeight = truck.max_weight || Infinity
-
   const packed = []
   const unpacked = []
   let totalWeight = 0
   let packedVol = 0
   let loadOrder = 0
+  const stackedWeightMap = new Map()
 
-  // Track cumulative weight resting on each placed item (by item's packed index)
-  const stackedWeightMap = new Map() // placedIndex → lbs stacked on it
-
-  for (const unit of units) {
+  // ── Placement helper ─────────────────────────────────────────────────────────
+  function placeUnit(unit) {
     const canStackOnOthers = unit.can_stack_on_others !== 0 && unit.can_stack_on_others !== false
+    const noStackOnTop     = unit.allow_stacking_on_top === 0 || unit.allow_stacking_on_top === false
     const orientations = getOrientations(unit)
     const unitWeight = unit.weight || 0
-    let placed = false
 
-    const extremePoints = getExtremePoints(packed, truck)
-    // Placement priority: back of truck first (x desc), floor first (z asc), left first (y asc)
-    extremePoints.sort((a, b) => {
-      if (Math.abs(b.x - a.x) > 0.1) return b.x - a.x
-      if (Math.abs(a.z - b.z) > 0.1) return a.z - b.z
+    // Find the topmost placed item in the column that contains extreme point ep
+    const topAt = (ep) => {
+      const col = packed.filter(b =>
+        ep.x >= b.x - 0.001 && ep.x < b.x + b.l - 0.001 &&
+        ep.y >= b.y - 0.001 && ep.y < b.y + b.w - 0.001
+      )
+      return col.length > 0 ? col.reduce((best, c) => (c.z + c.h > best.z + best.h ? c : best)) : null
+    }
+
+    const eps = getExtremePoints(packed, truck)
+    eps.sort((a, b) => {
+      const aStacked = a.z > 0.001
+      const bStacked = b.z > 0.001
+
+      // Highest priority: stacking on a matching similar case already placed.
+      // This proactively pairs like-cases before grabbing new floor space.
+      const aSim = aStacked && isSimilar(unit, topAt(a))
+      const bSim = bStacked && isSimilar(unit, topAt(b))
+      if (aSim && !bSim) return -1
+      if (!aSim && bSim) return 1
+
+      // Floor positions beat non-similar stacking — fill cab→door with no gaps.
+      // ALL items (including no-stack-on-top) fill from x=0 forward so free
+      // space always accumulates at the DOOR end, never in the middle.
+      if (aStacked !== bStacked) return aStacked ? 1 : -1
+
+      // Front-to-back (cab first, x asc), then left-to-right
+      if (Math.abs(a.x - b.x) > 0.1) return a.x - b.x
       return a.y - b.y
     })
 
-    outer: for (const ep of extremePoints) {
+    for (const ep of eps) {
       for (const ori of orientations) {
         const { l: bl, w: bw, h: bh, isRotated, isTipped } = ori
 
-        // Apply gravity: find lowest valid resting z for this footprint
+        if (!canStackOnOthers && ep.z > 0.001) continue
+
         const floorZ = projectToFloor(ep.x, ep.y, bl, bw, packed)
-        // Try gravity-projected z first, then the extreme-point z as fallback
         const candidateZs = [...new Set([floorZ, ep.z])].sort((a, b) => a - b)
 
         for (const cz of candidateZs) {
+          if (!canStackOnOthers && cz > 0.001) continue
           if (!fitsInTruck(ep.x, ep.y, cz, bl, bw, bh, truck)) continue
           if (overlaps(ep.x, ep.y, cz, bl, bw, bh, packed)) continue
 
           // --- Stacking constraints ---
           if (cz > 0.001) {
-            // Item is being raised above the floor — must be allowed to stack
             if (!canStackOnOthers) continue
-
-            // Must have solid support directly below (no floating)
             const below = getItemsDirectlyBelow(ep.x, ep.y, cz, bl, bw, packed)
             if (below.length === 0) continue
 
-            // Each supporting item must permit stacking and not be over its weight limit
+            // Stack count limit: max 3 high; max 2 high if 3rd case exceeds 7 ft (84")
+            const maxBelowCount = Math.max(...below.map(b => b.stackCount || 1))
+            if (maxBelowCount >= 3) continue
+            if (maxBelowCount >= 2 && (cz + bh) > 84) continue
+
             let stackOk = true
             for (const b of below) {
               if (b.allow_stacking_on_top === 0 || b.allow_stacking_on_top === false) {
@@ -205,50 +259,49 @@ export function runBinPacking(items, truck) {
           // --- Truck weight limit ---
           if (totalWeight + unitWeight > maxTruckWeight) {
             unpacked.push({ ...unit, reason: 'weight_limit' })
-            placed = true
-            break outer
+            return true
           }
 
           // --- Place the item ---
           const packedIdx = packed.length
           const below = cz > 0.001 ? getItemsDirectlyBelow(ep.x, ep.y, cz, bl, bw, packed) : []
           let stackedOn = null
+          const stackCount = below.length > 0
+            ? Math.max(...below.map(b => b.stackCount || 1)) + 1
+            : 1
 
-          // Update stacked weight map for supporting items
           for (const b of below) {
             stackedWeightMap.set(b._packedIdx, (stackedWeightMap.get(b._packedIdx) || 0) + unitWeight)
             if (stackedOn === null) stackedOn = b.id
           }
 
           packed.push({
-            ...unit,
-            _packedIdx: packedIdx,
+            ...unit, _packedIdx: packedIdx,
             x: ep.x, y: ep.y, z: cz,
             l: bl, w: bw, h: bh,
             loadOrder: ++loadOrder,
-            isRotated,
-            isTipped,
-            isFlipped: false,
+            isRotated, isTipped, isFlipped: false,
             orientationChanged: bl !== unit.length || bw !== unit.width || bh !== unit.height,
-            stackedOn,
+            stackedOn, stackCount,
           })
 
           totalWeight += unitWeight
           packedVol  += bl * bw * bh
-          placed = true
-          break outer
+          return true
         }
       }
     }
+    return false
+  }
 
-    if (!placed) {
-      unpacked.push({ ...unit, reason: 'no_space' })
-    }
+  // ── Single pass ──────────────────────────────────────────────────────────────
+  for (const unit of units) {
+    const placed = placeUnit(unit)
+    if (!placed) unpacked.push({ ...unit, reason: 'no_space' })
   }
 
   const callSheet = generateCallSheet(packed, truck)
   const utilization = truckVol > 0 ? Math.round((packedVol / truckVol) * 100 * 10) / 10 : 0
-
   return { packed, unpacked, utilization, totalWeight, callSheet }
 }
 

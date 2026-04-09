@@ -1,6 +1,6 @@
-import { useRef, useState, useMemo } from 'react'
+import React, { useRef, useState, useMemo } from 'react'
 import { Canvas, useFrame, useThree } from '@react-three/fiber'
-import { OrbitControls, Grid, Text } from '@react-three/drei'
+import { OrbitControls, Grid, Html } from '@react-three/drei'
 import * as THREE from 'three'
 
 // ── Single packed box mesh ────────────────────────────────────────────────
@@ -79,20 +79,12 @@ function TruckShell({ truck }) {
   )
 }
 
-// ── Axis labels ───────────────────────────────────────────────────────────
-function AxisLabel({ position, text }) {
-  return (
-    <Text position={position} fontSize={0.12} color="#6b7280" anchorX="center" anchorY="middle">
-      {text}
-    </Text>
-  )
-}
-
 // ── Main scene ────────────────────────────────────────────────────────────
 function Scene({ truck, packed, clipX, clipY, clipZ, explodeAmount, onHover, onUnhover, hoveredBox }) {
   const IN_TO_M = 0.0254
   const l = truck.length * IN_TO_M
   const w = truck.width * IN_TO_M
+  const h = truck.height * IN_TO_M
 
   return (
     <>
@@ -102,6 +94,24 @@ function Scene({ truck, packed, clipX, clipY, clipZ, explodeAmount, onHover, onU
       <pointLight position={[l / 2, 3, w / 2]} intensity={0.4} color="#4f8ef7" />
 
       <TruckShell truck={truck} />
+
+      {/* CAB / DOOR labels — Html projects 3D position to screen so they rotate with the scene */}
+      <Html position={[0, h * 0.55, w / 2]} center>
+        <div style={{
+          color: '#22c55e', fontWeight: 'bold', fontSize: '13px',
+          background: 'rgba(0,0,0,0.75)', padding: '3px 8px',
+          borderRadius: '4px', border: '1px solid #22c55e',
+          userSelect: 'none', pointerEvents: 'none', whiteSpace: 'nowrap'
+        }}>CAB</div>
+      </Html>
+      <Html position={[l, h * 0.55, w / 2]} center>
+        <div style={{
+          color: '#f97316', fontWeight: 'bold', fontSize: '13px',
+          background: 'rgba(0,0,0,0.75)', padding: '3px 8px',
+          borderRadius: '4px', border: '1px solid #f97316',
+          userSelect: 'none', pointerEvents: 'none', whiteSpace: 'nowrap'
+        }}>DOOR</div>
+      </Html>
 
       {packed.map((box, i) => (
         <PackedBox
@@ -165,6 +175,29 @@ function BoxTooltip({ box }) {
 }
 
 // ── Exported viewer component ─────────────────────────────────────────────
+class CanvasErrorBoundary extends React.Component {
+  constructor(props) { super(props); this.state = { error: null } }
+  static getDerivedStateFromError(e) { return { error: e } }
+  render() {
+    if (this.state.error) {
+      return (
+        <div className="flex items-center justify-center h-full bg-dark-900 text-red-400 text-sm p-6 text-center">
+          <div>
+            <div className="text-2xl mb-2">⚠️</div>
+            <div className="font-semibold mb-1">3D view error</div>
+            <div className="text-xs text-gray-500">{String(this.state.error.message)}</div>
+            <button
+              className="mt-3 btn-secondary !text-xs"
+              onClick={() => this.setState({ error: null })}
+            >Retry</button>
+          </div>
+        </div>
+      )
+    }
+    return this.props.children
+  }
+}
+
 export default function TruckViewer3D({ truck, packed }) {
   const IN_TO_M = 0.0254
   const [hoveredBox, setHoveredBox] = useState(null)
@@ -242,34 +275,36 @@ export default function TruckViewer3D({ truck, packed }) {
 
       {/* Canvas */}
       <div className="flex-1 relative">
-        <Canvas
-          camera={
-            perspective
-              ? { position: [tl * 0.8, th * 1.2, tw * 1.8], fov: 50, near: 0.01, far: 100 }
-              : { position: [tl * 0.8, th * 1.2, tw * 1.8], fov: 10, near: 0.01, far: 200 }
-          }
-          style={{ background: '#0a0a0f' }}
-          shadows
-        >
-          <Scene
-            truck={truck}
-            packed={packed || []}
-            clipX={clipX}
-            clipY={clipY}
-            clipZ={clipZ}
-            explodeAmount={explodeAmount}
-            onHover={setHoveredBox}
-            onUnhover={() => setHoveredBox(null)}
-            hoveredBox={hoveredBox}
-          />
-          <OrbitControls
-            enableDamping
-            dampingFactor={0.08}
-            minDistance={0.5}
-            maxDistance={30}
-            target={[tl / 2, th / 2, tw / 2]}
-          />
-        </Canvas>
+        <CanvasErrorBoundary>
+          <Canvas
+            camera={
+              perspective
+                ? { position: [tl * 0.8, th * 1.2, tw * 1.8], fov: 50, near: 0.01, far: 100 }
+                : { position: [tl * 0.8, th * 1.2, tw * 1.8], fov: 10, near: 0.01, far: 200 }
+            }
+            style={{ background: '#0a0a0f' }}
+            shadows
+          >
+            <Scene
+              truck={truck}
+              packed={packed || []}
+              clipX={clipX}
+              clipY={clipY}
+              clipZ={clipZ}
+              explodeAmount={explodeAmount}
+              onHover={setHoveredBox}
+              onUnhover={() => setHoveredBox(null)}
+              hoveredBox={hoveredBox}
+            />
+            <OrbitControls
+              enableDamping
+              dampingFactor={0.08}
+              minDistance={0.5}
+              maxDistance={30}
+              target={[tl / 2, th / 2, tw / 2]}
+            />
+          </Canvas>
+        </CanvasErrorBoundary>
 
         <BoxTooltip box={hoveredBox} />
       </div>

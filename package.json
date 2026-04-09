@@ -1,6 +1,6 @@
 {
   "name": "truck-pack-app",
-  "version": "1.0.2",
+  "version": "1.1.0",
   "description": "3D Truck Load Planner",
   "main": "src/main/index.js",
   "scripts": {
@@ -48,6 +48,11 @@
         "width": 540,
         "height": 380
       }
+    },
+    "publish": {
+      "provider": "github",
+      "owner": "OBitsPlease",
+      "repo": "truck-pack-app"
     }
   },
   "keywords": [
