@@ -1,5 +1,6 @@
-const { app, BrowserWindow, protocol, net, ipcMain, dialog, shell, screen } = require('electron')
+const { app, BrowserWindow, protocol, ipcMain, dialog, shell, screen } = require('electron')
 const path = require('path')
+const fs = require('fs')
 const http = require('http')
 const { autoUpdater } = require('electron-updater')
 const { setupDatabase } = require('./db')
@@ -101,14 +102,18 @@ app.whenReady().then(async () => {
   // Sync handler: renderer can request the app version
   ipcMain.on('app:getVersion', (e) => { e.returnValue = app.getVersion() })
 
-  // ── Custom app:// protocol — serves local assets (e.g. splash image) ──────
-  // Using protocol.handle (Electron 25+). Handles app://splash-bg → splash.png
+  // ── Custom app:// protocol — serves splash.png without any file:// URL ─────
   const splashImgPath = app.isPackaged
     ? path.join(process.resourcesPath, 'splash.png')
     : path.join(__dirname, '../../assets/splash.png')
   protocol.handle('app', (request) => {
     if (new URL(request.url).hostname === 'splash-bg') {
-      return net.fetch('file://' + splashImgPath.replace(/\\/g, '/'))
+      try {
+        const data = fs.readFileSync(splashImgPath)
+        return new Response(data, { headers: { 'content-type': 'image/png' } })
+      } catch (e) {
+        return new Response('Not found', { status: 404 })
+      }
     }
     return new Response('Not found', { status: 404 })
   })

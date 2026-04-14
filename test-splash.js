@@ -7,14 +7,20 @@
  *  - loads splash.html which uses app://splash-bg as background
  * If this looks correct on Mac, it will work on Windows too.
  */
-const { app, BrowserWindow, protocol, net, screen } = require('electron')
+const { app, BrowserWindow, protocol, screen } = require('electron')
 const path = require('path')
+const fs = require('fs')
 
 app.whenReady().then(() => {
   const splashImgPath = path.join(__dirname, 'assets/splash.png')
   protocol.handle('app', (request) => {
     if (new URL(request.url).hostname === 'splash-bg') {
-      return net.fetch('file://' + splashImgPath.replace(/\\/g, '/'))
+      try {
+        const data = fs.readFileSync(splashImgPath)
+        return new Response(data, { headers: { 'content-type': 'image/png' } })
+      } catch (e) {
+        return new Response('Not found', { status: 404 })
+      }
     }
     return new Response('Not found', { status: 404 })
   })
