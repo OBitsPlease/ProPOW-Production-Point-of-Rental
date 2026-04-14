@@ -1,6 +1,5 @@
-const { app, BrowserWindow, ipcMain, dialog, shell, screen } = require('electron')
+const { app, BrowserWindow, protocol, net, ipcMain, dialog, shell, screen } = require('electron')
 const path = require('path')
-const { pathToFileURL } = require('url')
 const http = require('http')
 const { autoUpdater } = require('electron-updater')
 const { setupDatabase } = require('./db')
@@ -44,18 +43,7 @@ async function createWindow() {
         contextIsolation: true,
       },
     })
-    const splashImgPath = app.isPackaged
-      ? path.join(process.resourcesPath, 'splash.png')
-      : path.join(__dirname, '../../assets/splash.png')
     splashWindow.loadFile(path.join(__dirname, 'splash.html'))
-    splashWindow.webContents.once('did-finish-load', () => {
-      try {
-        const fs = require('fs')
-        const data = fs.readFileSync(splashImgPath)
-        const dataUrl = 'data:image/png;base64,' + data.toString('base64')
-        splashWindow.webContents.executeJavaScript(`setSplashBg(${JSON.stringify(dataUrl)})`)
-      } catch (e) { /* no background — still shows bar + credit */ }
-    })
     splashWindow.on('closed', () => { splashWindow = null })
   }
 
@@ -112,6 +100,18 @@ app.whenReady().then(async () => {
 
   // Sync handler: renderer can request the app version
   ipcMain.on('app:getVersion', (e) => { e.returnValue = app.getVersion() })
+
+  // ── Custom app:// protocol — serves local assets (e.g. splash image) ──────
+  // Using protocol.handle (Electron 25+). Handles app://splash-bg → splash.png
+  const splashImgPath = app.isPackaged
+    ? path.join(process.resourcesPath, 'splash.png')
+    : path.join(__dirname, '../../assets/splash.png')
+  protocol.handle('app', (request) => {
+    if (new URL(request.url).hostname === 'splash-bg') {
+      return net.fetch('file://' + splashImgPath.replace(/\\/g, '/'))
+    }
+    return new Response('Not found', { status: 404 })
+  })
 
   const isDev = await createWindow()
 

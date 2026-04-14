@@ -3,16 +3,22 @@
  * Run with:  npx electron test-splash.js
  *
  * Simulates EXACTLY what the packaged app does:
- *  - reads assets/splash.png from disk
- *  - converts to base64 data URL
- *  - injects it into splash.html via executeJavaScript
+ *  - registers app:// protocol to serve splash.png
+ *  - loads splash.html which uses app://splash-bg as background
  * If this looks correct on Mac, it will work on Windows too.
  */
-const { app, BrowserWindow, screen } = require('electron')
+const { app, BrowserWindow, protocol, net, screen } = require('electron')
 const path = require('path')
-const fs = require('fs')
 
 app.whenReady().then(() => {
+  const splashImgPath = path.join(__dirname, 'assets/splash.png')
+  protocol.handle('app', (request) => {
+    if (new URL(request.url).hostname === 'splash-bg') {
+      return net.fetch('file://' + splashImgPath.replace(/\\/g, '/'))
+    }
+    return new Response('Not found', { status: 404 })
+  })
+
   const { width, height } = screen.getPrimaryDisplay().bounds
   const win = new BrowserWindow({
     width, height, x: 0, y: 0,
@@ -22,18 +28,7 @@ app.whenReady().then(() => {
   })
 
   win.loadFile(path.join(__dirname, 'src/main/splash.html'))
-
-  win.webContents.once('did-finish-load', () => {
-    try {
-      const imgPath = path.join(__dirname, 'assets/splash.png')
-      const data = fs.readFileSync(imgPath)
-      const dataUrl = 'data:image/png;base64,' + data.toString('base64')
-      win.webContents.executeJavaScript(`setSplashBg(${JSON.stringify(dataUrl)})`)
-      console.log('✓ splash.png loaded and injected successfully')
-    } catch (e) {
-      console.error('✗ Failed to load splash.png:', e.message)
-    }
-  })
+  win.webContents.once('did-finish-load', () => console.log('✓ splash loaded'))
 
   setTimeout(() => app.quit(), 9000)
 })
