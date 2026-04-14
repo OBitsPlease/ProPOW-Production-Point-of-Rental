@@ -44,8 +44,9 @@ async function createWindow() {
         webSecurity: false,   // needed to load local file:// image from CSS/JS
       },
     })
-    const splashImg = path.join(__dirname, '../../assets/splash.png')
-      .replace(/\\/g, '/')  // Windows backslash → forward slash
+    const splashImg = app.isPackaged
+      ? path.join(process.resourcesPath, 'splash.png').replace(/\\/g, '/')
+      : path.join(__dirname, '../../assets/splash.png').replace(/\\/g, '/')
     splashWindow.loadFile(path.join(__dirname, 'splash.html'), {
       query: { bg: `file://${splashImg}` },
     })

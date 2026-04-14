@@ -23,6 +23,9 @@
       "src/main/**/*",
       "assets/**/*"
     ],
+    "extraResources": [
+      { "from": "assets/splash.png", "to": "splash.png" }
+    ],
     "mac": {
       "category": "public.app-category.business",
       "icon": "assets/installer/icon.icns",
