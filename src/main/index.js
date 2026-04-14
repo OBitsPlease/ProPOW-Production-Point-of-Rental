@@ -42,15 +42,19 @@ async function createWindow() {
       webPreferences: {
         nodeIntegration: false,
         contextIsolation: true,
-        webSecurity: false,   // needed to load local file:// image from CSS/JS
       },
     })
     const splashImgPath = app.isPackaged
       ? path.join(process.resourcesPath, 'splash.png')
       : path.join(__dirname, '../../assets/splash.png')
-    const splashImgUrl = pathToFileURL(splashImgPath).href
-    splashWindow.loadFile(path.join(__dirname, 'splash.html'), {
-      query: { bg: splashImgUrl },
+    splashWindow.loadFile(path.join(__dirname, 'splash.html'))
+    splashWindow.webContents.once('did-finish-load', () => {
+      try {
+        const fs = require('fs')
+        const data = fs.readFileSync(splashImgPath)
+        const dataUrl = 'data:image/png;base64,' + data.toString('base64')
+        splashWindow.webContents.executeJavaScript(`setSplashBg(${JSON.stringify(dataUrl)})`)
+      } catch (e) { /* no background — still shows bar + credit */ }
     })
     splashWindow.on('closed', () => { splashWindow = null })
   }

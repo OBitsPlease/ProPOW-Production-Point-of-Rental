@@ -127,21 +127,18 @@
   </div>
 
   <script>
-    // ── Set background image from query param ──────────────────────────────
-    const bg = new URLSearchParams(window.location.search).get('bg')
     const bgEl = document.getElementById('bg')
-    if (bg) {
-      bgEl.style.backgroundImage = 'url("' + bg + '")'
-    }
 
-    // ── Fade in image, credit, track after a tick ──────────────────────────
-    requestAnimationFrame(() => {
-      requestAnimationFrame(() => {
+    // Called by main process with a base64 data URL — no file:// URLs needed
+    window.setSplashBg = function(dataUrl) {
+      bgEl.style.backgroundImage = 'url("' + dataUrl + '")'
+      // Fade everything in once the image data is available
+      requestAnimationFrame(() => requestAnimationFrame(() => {
         bgEl.style.opacity = '1'
         document.getElementById('credit').style.opacity = '1'
         document.getElementById('track').style.opacity = '1'
-      })
-    })
+      }))
+    }
 
     // ── JS-driven progress bar over exactly 7000 ms ────────────────────────
     const DURATION = 7000   // ms — matches MIN_SPLASH_MS in index.js
