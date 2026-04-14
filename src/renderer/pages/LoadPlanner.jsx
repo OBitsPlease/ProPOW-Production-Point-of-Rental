@@ -10,7 +10,7 @@ export default function LoadPlanner() {
   const navigate = useNavigate()
 
   const [trucks, setTrucks] = useState([])
-  const [items, setItems] = useState([])
+  const [cases, setCases] = useState([])
   const [depts, setDepts] = useState([])
   const [selectedTruckId, setSelectedTruckId] = useState('')
   const [planName, setPlanName] = useState('New Load Plan')
@@ -24,13 +24,22 @@ export default function LoadPlanner() {
 
   const load = useCallback(async () => {
     if (!window.electronAPI) return
-    const [t, i, d] = await Promise.all([
+    const [t, rawCases, rawItems, d] = await Promise.all([
       window.electronAPI.getTrucks(),
+      window.electronAPI.cases.getAll(),
       window.electronAPI.getItems(),
       window.electronAPI.getDepartments(),
     ])
+    // Compute each case's total weight: shell weight + sum of contained item weights
+    const computedCases = rawCases.map(c => {
+      const itemsWeight = (c.items || []).reduce((sum, ci) => {
+        const inv = rawItems.find(i => i.id === ci.id)
+        return sum + (inv ? (parseFloat(inv.weight) || 0) * (ci.qty || 1) : 0)
+      }, 0)
+      return { ...c, weight: (parseFloat(c.weight) || 0) + itemsWeight, quantity: 1, department_color: c.color || '#f59e0b' }
+    })
     setTrucks(t)
-    setItems(i)
+    setCases(computedCases)
     setDepts(d)
 
     // Check for repack loaded via RePacks page
@@ -67,12 +76,12 @@ export default function LoadPlanner() {
   const selectedTruck = trucks.find(t => t.id === parseInt(selectedTruckId) || t.id === selectedTruckId)
 
   const runPacking = async () => {
-    if (!selectedTruck || items.length === 0) return
+    if (!selectedTruck || cases.length === 0) return
     setRunning(true)
     // Run in next tick so UI updates
     await new Promise(r => setTimeout(r, 50))
     try {
-      const r = runBinPacking(items, selectedTruck)
+      const r = runBinPacking(cases, selectedTruck)
       setResult(r)
     } finally {
       setRunning(false)
@@ -112,7 +121,7 @@ export default function LoadPlanner() {
   const buildPackData = () => ({
     name: planName,
     truck: selectedTruck,
-    items,
+    items: cases,
     result,
     departments: depts,
     settings: { units: selectedTruck?.unit || 'in' },
@@ -205,23 +214,23 @@ export default function LoadPlanner() {
           )}
         </div>
 
-        {/* Items summary */}
+        {/* Cases summary */}
         <div className="p-4 border-b border-dark-600">
           <div className="flex items-center justify-between mb-2">
-            <span className="text-gray-400 text-sm font-medium">Items ({items.reduce((s, i) => s + i.quantity, 0)} units)</span>
+            <span className="text-gray-400 text-sm font-medium">Cases ({cases.length})</span>
           </div>
           <div className="space-y-1 max-h-48 overflow-y-auto">
-            {items.length === 0 ? (
-              <p className="text-gray-600 text-xs">No items — go to Items page to add some</p>
+            {cases.length === 0 ? (
+              <p className="text-gray-600 text-xs">No cases — go to Items page to create cases</p>
             ) : (
-              items.map(item => (
-                <div key={item.id} className="flex items-center gap-2 text-xs text-gray-300">
+              cases.map(c => (
+                <div key={c.id} className="flex items-center gap-2 text-xs text-gray-300">
                   <span
                     className="w-2 h-2 rounded-full shrink-0"
-                    style={{ backgroundColor: item.department_color || '#6b7280' }}
+                    style={{ backgroundColor: c.color || '#f59e0b' }}
                   />
-                  <span className="flex-1 truncate">{item.name}</span>
-                  <span className="text-gray-500">×{item.quantity}</span>
+                  <span className="flex-1 truncate">{c.name}</span>
+                  <span className="text-gray-500">{c.weight > 0 ? `${c.weight}lbs` : ''}</span>
                 </div>
               ))
             )}
@@ -232,7 +241,7 @@ export default function LoadPlanner() {
         <div className="p-4 space-y-2">
           <button
             onClick={runPacking}
-            disabled={!selectedTruck || items.length === 0 || running}
+            disabled={!selectedTruck || cases.length === 0 || running}
             className="btn-primary w-full justify-center disabled:opacity-40 disabled:cursor-not-allowed"
           >
             <Play size={14} />

@@ -25,20 +25,25 @@ function hexToRgb(hex) {
 
 function hdr(doc, title, subtitle, PW) {
   doc.setFillColor(...C.navy)
-  doc.rect(0, 0, PW, 22, 'F')
+  doc.rect(0, 0, PW, 26, 'F')
+  // ProPOR+ brand — left side
+  doc.setTextColor(...C.white)
+  doc.setFontSize(15); doc.setFont('helvetica', 'bold')
+  doc.text('ProPOR+', 14, 11)
+  doc.setFontSize(6.5); doc.setFont('helvetica', 'normal')
+  doc.setTextColor(180, 200, 230)
+  doc.text('PRODUCTION · POINT · OF · RENTAL', 14, 17.5)
+  // Event name — center, large bold
   doc.setTextColor(...C.white)
   doc.setFontSize(13); doc.setFont('helvetica', 'bold')
-  doc.text('TRUCK PACK', 14, 10)
-  doc.setFontSize(7); doc.setFont('helvetica', 'normal')
-  doc.text('3D Load Planner', 14, 16)
-  doc.setFontSize(11); doc.setFont('helvetica', 'bold')
-  doc.text(title, PW / 2, 13, { align: 'center' })
+  doc.text(title, PW / 2, 12, { align: 'center' })
   if (subtitle) {
     doc.setFontSize(7); doc.setFont('helvetica', 'normal')
-    doc.text(subtitle, PW - 14, 16, { align: 'right' })
+    doc.setTextColor(180, 200, 230)
+    doc.text(subtitle, PW / 2, 19, { align: 'center' })
   }
   doc.setFillColor(...C.blue)
-  doc.rect(0, 22, PW, 1.2, 'F')
+  doc.rect(0, 26, PW, 1.2, 'F')
 }
 
 function statBox(doc, x, y, w, h, label, value, bg, fg) {
@@ -70,7 +75,7 @@ export function generateLoadPlanPDF(plan, packed, unpacked, callSheet, truck, de
   doc.setFillColor(...C.white); doc.rect(0, 0, PW, PH, 'F')
   hdr(doc, eventName, truckName + '  ·  ' + eventDate, PW)
 
-  const sY = 28, sH = 18, sg = 3
+  const sY = 32, sH = 18, sg = 3
   const sW = (PW - 28 - sg * 3) / 4
   statBox(doc, 14,            sY, sW, sH, 'UTILIZATION',  Math.round(plan.utilization || 0) + '%', C.blueLight, C.blue)
   statBox(doc, 14+sW+sg,      sY, sW, sH, 'TOTAL WEIGHT', (plan.totalWeight || 0).toLocaleString() + ' lbs', C.gray100, C.gray800)
@@ -146,7 +151,7 @@ export function generateLoadPlanPDF(plan, packed, unpacked, callSheet, truck, de
       if (manifestFirstPage) { manifestFirstPage = false; return }
       doc.setFillColor(...C.white); doc.rect(0, 0, PW, PH, 'F')
       hdr(doc, eventName + ' — Manifest (cont.)', eventDate, PW)
-      data.settings.startY = 28
+      data.settings.startY = 32
     },
   })
 
@@ -181,15 +186,15 @@ export function generateLoadPlanPDF(plan, packed, unpacked, callSheet, truck, de
   hdr(doc, 'CALL SHEET  ·  ' + eventName, truckName + '  ·  ' + eventDate, PW)
 
   doc.setFillColor(...C.blueLight); doc.setDrawColor(...C.blue)
-  doc.roundedRect(14, 28, PW - 28, 14, 2, 2, 'FD')
+  doc.roundedRect(14, 32, PW - 28, 14, 2, 2, 'FD')
   doc.setTextColor(...C.navy); doc.setFontSize(7.5); doc.setFont('helvetica', 'bold')
-  doc.text('PACKER INSTRUCTIONS', PW / 2, 34, { align: 'center' })
+  doc.text('PACKER INSTRUCTIONS', PW / 2, 38, { align: 'center' })
   doc.setFont('helvetica', 'normal'); doc.setFontSize(7)
-  doc.text('Call each case in order. Load from BACK to FRONT. Cross off each row as the case enters the truck.', PW / 2, 39, { align: 'center' })
+  doc.text('Call each case in order. Load from BACK to FRONT. Cross off each row as the case enters the truck.', PW / 2, 43, { align: 'center' })
 
   let callFirstPage = true
   autoTable(doc, {
-    startY: 47,
+    startY: 51,
     head: [['CALL #', 'CASE NAME', 'SKU / CASE #', 'DEPARTMENT', 'DIMENSIONS', 'WEIGHT', 'CHECK']],
     body: (callSheet || []).map(function(row, i) {
       return [
@@ -220,7 +225,7 @@ export function generateLoadPlanPDF(plan, packed, unpacked, callSheet, truck, de
       if (callFirstPage) { callFirstPage = false; return }
       doc.setFillColor(...C.white); doc.rect(0, 0, PW, PH, 'F')
       hdr(doc, 'CALL SHEET (cont.)  ·  ' + eventName, eventDate, PW)
-      data.settings.startY = 28
+      data.settings.startY = 32
     },
   })
 
