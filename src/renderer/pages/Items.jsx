@@ -193,7 +193,7 @@ export default function Items() {
     }
   }
   const deleteItem = async (id) => {
-    if (!confirm('Delete this item?')) return
+    if (!await api.dialog.confirm('Delete this item?')) return
     await api.deleteItem(id); loadAll()
   }
 
@@ -235,11 +235,11 @@ export default function Items() {
     }
   }
   const deleteCase = async (id) => {
-    if (!confirm('Delete this case?')) return
+    if (!await api.dialog.confirm('Delete this case?')) return
     await api.cases.delete(id); loadAll()
   }
   const emptyCase = async (c) => {
-    if (!confirm(`Remove all items from "${c.name}"? The inventory will go back into rotation.`)) return
+    if (!await api.dialog.confirm(`Remove all items from "${c.name}"?`, 'The inventory will go back into rotation.')) return
     await api.cases.save({ ...c, items: [] }); loadAll()
   }
   // Returns how many of an item are free to assign to the current case being edited.
@@ -286,7 +286,7 @@ export default function Items() {
     setGroupModal(null); loadAll()
   }
   const deleteGroup = async (id) => {
-    if (!confirm('Delete this group? Items inside will become ungrouped.')) return
+    if (!await api.dialog.confirm('Delete this group?', 'Items inside will become ungrouped.')) return
     await api.groups.delete(id); loadAll()
   }
 
@@ -777,7 +777,14 @@ export default function Items() {
               <select className="input-field" value={caseForm.group_id || ''}
                 onChange={e => setC('group_id', e.target.value || null)}>
                 <option value="">— Ungrouped —</option>
-                {groups.map(g => <option key={g.id} value={g.id}>{g.name}</option>)}
+                {topGroups.map(g => (
+                  <optgroup key={g.id} label={g.name}>
+                    <option value={g.id}>{g.name} (top level)</option>
+                    {subgroupsOf(g.id).map(sg => (
+                      <option key={sg.id} value={sg.id}>{sg.name}</option>
+                    ))}
+                  </optgroup>
+                ))}
               </select>
             </div>
             <div className="grid grid-cols-4 gap-3">

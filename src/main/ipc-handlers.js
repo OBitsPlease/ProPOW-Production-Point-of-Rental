@@ -7,6 +7,19 @@ let mainWindowRef = null
 function registerIpcHandlers(ipcMain, dialog, shell, win) {
   mainWindowRef = win
 
+  // Native confirm dialog — fixes Electron focus bug caused by window.confirm()
+  ipcMain.handle('dialog:confirm', async (_, { message, detail }) => {
+    const result = await dialog.showMessageBox(win, {
+      type: 'question',
+      buttons: ['Cancel', 'OK'],
+      defaultId: 1,
+      cancelId: 0,
+      message: message || 'Are you sure?',
+      detail: detail || '',
+    })
+    return result.response === 1
+  })
+
   ipcMain.handle('trucks:getAll', () => getDb().trucks.getAll())
 
   ipcMain.handle('trucks:save', (_, truck) => {

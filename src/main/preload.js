@@ -41,6 +41,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // File dialog
   openFolder: () => ipcRenderer.invoke('dialog:openFolder'),
 
+  // Native confirm dialog (replaces window.confirm to avoid Electron focus bug)
+  dialog: {
+    confirm: (message, detail) => ipcRenderer.invoke('dialog:confirm', { message, detail }),
+  },
+
   // Events from main → renderer
   onInventoryImported: (cb) => ipcRenderer.on('inventory:imported', (_, data) => cb(data)),
   onInventoryError: (cb) => ipcRenderer.on('inventory:error', (_, err) => cb(err)),
