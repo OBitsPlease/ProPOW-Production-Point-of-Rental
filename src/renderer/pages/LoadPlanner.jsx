@@ -6,7 +6,7 @@ import { generateLoadPlanPDF } from '../utils/pdfReport'
 import TruckViewer3D from '../components/TruckViewer3D'
 
 export default function LoadPlanner() {
-  const { planId } = useParams()
+  const { planId, eventId } = useParams()
   const navigate = useNavigate()
 
   const [trucks, setTrucks] = useState([])
@@ -31,7 +31,7 @@ export default function LoadPlanner() {
       window.electronAPI.getDepartments(),
     ])
     // Compute each case's total weight: shell weight + sum of contained item weights
-    const computedCases = rawCases.map(c => {
+    const allComputedCases = rawCases.map(c => {
       const itemsWeight = (c.items || []).reduce((sum, ci) => {
         const inv = rawItems.find(i => i.id === ci.id)
         return sum + (inv ? (parseFloat(inv.weight) || 0) * (ci.qty || 1) : 0)
@@ -39,7 +39,6 @@ export default function LoadPlanner() {
       return { ...c, weight: (parseFloat(c.weight) || 0) + itemsWeight, quantity: 1, department_color: c.color || '#f59e0b' }
     })
     setTrucks(t)
-    setCases(computedCases)
     setDepts(d)
 
     // Check for repack loaded via RePacks page
@@ -54,9 +53,27 @@ export default function LoadPlanner() {
           if (matchedTruck) setSelectedTruckId(matchedTruck.id)
         }
         if (repack.result) setResult(repack.result)
+        setCases(allComputedCases)
         return
       } catch(e) { /* ignore parse errors */ }
     }
+
+    // When opened from an event, filter to only the cases on that event's gear list
+    if (eventId) {
+      const ev = await window.electronAPI.events.get(parseInt(eventId))
+      if (ev) {
+        setPlanName(`${ev.name} — Load Plan`)
+        const eventCaseIds = new Set(
+          (ev.gear || []).filter(g => g._type === 'case').map(g => g.case_id)
+        )
+        setCases(allComputedCases.filter(c => eventCaseIds.has(c.id)))
+      } else {
+        setCases(allComputedCases)
+      }
+      return
+    }
+
+    setCases(allComputedCases)
 
     if (planId) {
       const plan = await window.electronAPI.getLoadPlan(planId)
@@ -69,7 +86,7 @@ export default function LoadPlanner() {
         }
       }
     }
-  }, [planId])
+  }, [planId, eventId])
 
   useEffect(() => { load() }, [load])
 
@@ -221,7 +238,7 @@ export default function LoadPlanner() {
           </div>
           <div className="space-y-1 max-h-48 overflow-y-auto">
             {cases.length === 0 ? (
-              <p className="text-gray-600 text-xs">No cases — go to Items page to create cases</p>
+              <p className="text-gray-600 text-xs">{eventId ? 'No cases added to this event — add cases in the event gear list first' : 'No cases — go to Items page to create cases'}</p>
             ) : (
               cases.map(c => (
                 <div key={c.id} className="flex items-center gap-2 text-xs text-gray-300">
