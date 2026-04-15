@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import {
   ArrowLeft, Save, Trash2, Check, Calendar, MapPin, Users, Package,
@@ -148,6 +148,10 @@ export default function EventDetail() {
   const [caseQtys, setCaseQtys]   = useState({})
   const [itemQtys, setItemQtys]   = useState({})
 
+  // Gear list drag-drop
+  const draggingGearIdx = useRef(null)
+  const [gearDropOver, setGearDropOver] = useState(null)
+
   // Crew new member form
   const [newCrew, setNewCrew]     = useState({ name:'', role:'', phone:'', email:'' })
 
@@ -182,7 +186,8 @@ export default function EventDetail() {
   }
 
   const deleteEvent = async () => {
-    if (!confirm(`Delete "${event.name}"? This cannot be undone.`)) return
+    if (!await window.electronAPI.dialog.confirm(`Delete "${event.name}"?`, 'This cannot be undone.'))
+      return
     await window.electronAPI.events.delete(Number(eventId))
     navigate('/events')
   }
@@ -290,8 +295,8 @@ export default function EventDetail() {
         newGear[existing] = { ...newGear[existing], quantity: qty }
       } else {
         const items = (cs.items || []).map(ci => {
-          const item = allItems.find(i => i.id === ci.item_id)
-          return item ? { item_id: ci.item_id, qty: ci.qty, name: item.name, weight: item.weight || 0, department_name: item.department_name || '', department_color: item.department_color || '' } : null
+          const item = allItems.find(i => i.id === (ci.item_id || ci.id))
+          return item ? { item_id: item.id, qty: ci.qty || 1, name: item.name, weight: item.weight || 0, department_name: item.department_name || '', department_color: item.department_color || '' } : null
         }).filter(Boolean)
         newGear.push({
           _type: 'case', case_id: cs.id, name: cs.name, color: cs.color || '#f59e0b',
@@ -328,6 +333,35 @@ export default function EventDetail() {
   const removeGear = (idx) => {
     const gear = [...(event.gear || [])]
     gear.splice(idx, 1)
+    update({ gear })
+  }
+
+  // Drag an item gear row onto a case gear row → move item into that case
+  const handleGearDrop = (e, targetIdx) => {
+    e.preventDefault()
+    setGearDropOver(null)
+    const srcIdx = draggingGearIdx.current
+    draggingGearIdx.current = null
+    if (srcIdx === null || srcIdx === targetIdx) return
+    const gear = [...(event.gear || [])]
+    const src = gear[srcIdx]
+    const target = gear[targetIdx]
+    if (!src || !target || src._type === 'case' || target._type !== 'case') return
+    // Move the item into the case's items list
+    const existingIdx = (target.items || []).findIndex(ci => ci.item_id === src.item_id)
+    let newItems
+    if (existingIdx >= 0) {
+      newItems = target.items.map((ci, i) =>
+        i === existingIdx ? { ...ci, qty: (ci.qty || 1) + (src.quantity || 1) } : ci
+      )
+    } else {
+      newItems = [...(target.items || []), {
+        item_id: src.item_id, name: src.name, qty: src.quantity || 1,
+        weight: src.weight || 0, department_name: src.department_name || '', department_color: src.department_color || '',
+      }]
+    }
+    gear[targetIdx] = { ...target, items: newItems }
+    gear.splice(srcIdx, 1) // remove standalone item row
     update({ gear })
   }
 
@@ -635,8 +669,20 @@ export default function EventDetail() {
                     const a = availability.get(g.item_id)
                     conflict = a && a.available < (g.quantity || 1)
                   }
+                  const isDragOver = gearDropOver === idx && isCase && !isCase === false
                   return (
-                    <div key={idx} className={`card p-0 overflow-hidden ${conflict ? 'border-red-500/30' : ''}`}>
+                    <div
+                      key={idx}
+                      className={`card p-0 overflow-hidden transition-all ${conflict ? 'border-red-500/30' : ''} ${
+                        gearDropOver === idx && isCase ? 'border-amber-400/60 bg-amber-500/10' : ''
+                      } ${!isCase ? 'cursor-grab active:cursor-grabbing' : ''}`}
+                      draggable={!isCase}
+                      onDragStart={!isCase ? (e) => { draggingGearIdx.current = idx; e.dataTransfer.effectAllowed = 'move' } : undefined}
+                      onDragEnd={!isCase ? () => { draggingGearIdx.current = null; setGearDropOver(null) } : undefined}
+                      onDragOver={isCase ? (e) => { e.preventDefault(); setGearDropOver(idx) } : undefined}
+                      onDragLeave={isCase ? (e) => { if (!e.currentTarget.contains(e.relatedTarget)) setGearDropOver(null) } : undefined}
+                      onDrop={isCase ? (e) => handleGearDrop(e, idx) : undefined}
+                    >
                       <div className="flex items-center gap-3 px-4 py-3">
                         {isCase && <div className="w-3 h-3 rounded-sm shrink-0" style={{ background: g.color || '#f59e0b' }} />}
                         <div className="flex-1 min-w-0">
@@ -651,6 +697,9 @@ export default function EventDetail() {
                             <div className="text-xs text-gray-500 mt-0.5 truncate">
                               {g.items.slice(0,3).map(i => i.name).join(', ')}{g.items.length > 3 ? ` +${g.items.length-3} more` : ''}
                             </div>
+                          )}
+                          {isCase && gearDropOver === idx && (
+                            <div className="text-xs text-amber-400 mt-0.5">Drop item here to add to case</div>
                           )}
                         </div>
                         <div className="flex items-center gap-2 shrink-0">
@@ -779,9 +828,8 @@ export default function EventDetail() {
                             className="input-field text-sm py-1 w-20 text-center"
                             value={qty}
                             onChange={e => {
-                              const a = availability.get(it.id)
-                              const max = a ? a.available + (qty || 0) : (it.quantity || 1)
-                              setCaseQtys(q => ({ ...q, [cs.id]: Math.min(max, Number(e.target.value)) }))
+                              const v = Math.max(1, Number(e.target.value) || 1)
+                              setCaseQtys(q => ({ ...q, [cs.id]: v }))
                             }}
                           />
                         </div>

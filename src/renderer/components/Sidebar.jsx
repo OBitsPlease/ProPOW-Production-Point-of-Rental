@@ -79,7 +79,7 @@ export default function Sidebar() {
 
       {/* Footer */}
       <div className="px-5 py-3 border-t border-dark-600 text-xs text-gray-600">
-        v2.0.7
+        v2.0.8
       </div>
     </aside>
   )

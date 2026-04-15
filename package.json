@@ -1,6 +1,6 @@
 {
   "name": "propor-plus",
-  "version": "2.0.7",
+  "version": "2.0.8",
   "description": "ProPOR+ - Production Point of Rental Plus Truck Loading",
   "main": "src/main/index.js",
   "scripts": {
