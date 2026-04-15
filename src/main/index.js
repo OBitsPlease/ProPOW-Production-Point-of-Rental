@@ -54,6 +54,7 @@ async function createWindow() {
     height: 900,
     minWidth: 1100,
     minHeight: 700,
+    title: 'ProPOR+',
     show: false,               // keep hidden until ready-to-show fires
     backgroundColor: '#0a0a0f',
     titleBarStyle: process.platform === 'darwin' ? 'hiddenInset' : 'default',
