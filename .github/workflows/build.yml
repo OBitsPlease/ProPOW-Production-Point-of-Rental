@@ -96,6 +96,7 @@ jobs:
           name: ProPOR+ ${{ github.ref_name }}
           draft: false
           prerelease: false
+          fail_on_unmatched_files: false
           files: |
             release/mac/*.dmg
             release/mac/*.zip
