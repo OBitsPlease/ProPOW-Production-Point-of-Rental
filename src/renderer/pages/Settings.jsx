@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Settings as SettingsIcon, Save, FolderOpen, Trash2, AlertTriangle, RefreshCw, Download, CheckCircle } from 'lucide-react'
+import { Settings as SettingsIcon, Save, Trash2, AlertTriangle, RefreshCw, Download, CheckCircle } from 'lucide-react'
 
 function useLocalStorage(key, defaultValue) {
   const [value, setValue] = useState(() => {
@@ -69,9 +69,6 @@ export default function Settings() {
   const [deptColors, setDeptColors] = useState({})
   const [savedDepts, setSavedDepts] = useState({})
 
-  // Inventory Integration
-  const [watchFolder, setWatchFolderState] = useState(null)
-
   // Updates
   const [autoUpdate, setAutoUpdate] = useLocalStorage('tp_auto_update', true)
   const [updateStatus, setUpdateStatus] = useState('idle') // idle | checking | available | downloading | downloaded | error | up-to-date
@@ -90,13 +87,7 @@ export default function Settings() {
       list.forEach(d => { colors[d.id] = d.color })
       setDeptColors(colors)
     }
-    const loadFolder = async () => {
-      if (!window.electronAPI) return
-      const folder = await window.electronAPI.getWatchFolder()
-      setWatchFolderState(folder)
-    }
     loadDepts()
-    loadFolder()
   }, [])
 
   // Updater listeners + auto-check on mount
@@ -117,15 +108,6 @@ export default function Settings() {
     await window.electronAPI.saveDepartment({ ...dept, color: deptColors[dept.id] })
     setSavedDepts(s => ({ ...s, [dept.id]: true }))
     setTimeout(() => setSavedDepts(s => ({ ...s, [dept.id]: false })), 1500)
-  }
-
-  const handleChangeFolder = async () => {
-    if (!window.electronAPI) return
-    const folderPath = await window.electronAPI.openFolder()
-    if (folderPath) {
-      await window.electronAPI.setWatchFolder(folderPath)
-      setWatchFolderState(folderPath)
-    }
   }
 
   const handleClearAllData = async () => {
@@ -276,28 +258,6 @@ export default function Settings() {
           checked={weightLimit}
           onChange={setWeightLimit}
         />
-      </SectionCard>
-
-      {/* Inventory Integration */}
-      <SectionCard title="Inventory Integration">
-        <div className="flex items-center gap-3">
-          <div className="flex-1">
-            <div className="text-sm font-medium text-gray-200 mb-1">Watch folder</div>
-            <div className="text-xs font-mono text-gray-400 bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 truncate">
-              {watchFolder || <span className="text-gray-600 italic">Not configured</span>}
-            </div>
-          </div>
-          <button
-            onClick={handleChangeFolder}
-            className="flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium rounded-lg transition-colors shrink-0 mt-5"
-          >
-            <FolderOpen size={15} />
-            Change
-          </button>
-        </div>
-        <p className="text-xs text-gray-500 mt-2">
-          New inventory files dropped into this folder will be imported automatically.
-        </p>
       </SectionCard>
 
       {/* Updates */}

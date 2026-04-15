@@ -1,7 +1,6 @@
 const path = require('path')
 const fs = require('fs')
 const { getDb } = require('./db')
-let chokidarWatcher = null
 let mainWindowRef = null
 
 function registerIpcHandlers(ipcMain, dialog, shell, win) {
@@ -81,7 +80,8 @@ function registerIpcHandlers(ipcMain, dialog, shell, win) {
     } else {
       const id = db.nextId('items')
       db.data.items.push({
-        id, name: item.name, sku: item.sku || '', serial: item.serial || '',
+        id, name: item.name, sku: item.sku || '', barcode: item.barcode || '',
+        serial: item.serial || '',
         department_id: item.department_id ? parseInt(item.department_id) : null,
         length: item.length, width: item.width, height: item.height,
         weight: item.weight || 0, quantity: item.quantity || 1,
@@ -459,6 +459,7 @@ function registerIpcHandlers(ipcMain, dialog, shell, win) {
         id,
         name: c.name,
         sku:   c.sku   || '',
+        barcode: c.barcode || '',
         serial: c.serial || '',
         color: c.color || '#f59e0b',
         group_id: c.group_id || null,
@@ -556,37 +557,82 @@ function registerIpcHandlers(ipcMain, dialog, shell, win) {
 
   ipcMain.handle('import:excel', async () => {
     const { canceled, filePaths } = await dialog.showOpenDialog({
-      title: 'Import Items from Excel',
+      title: 'Import Items & Cases from Excel',
       filters: [{ name: 'Excel/CSV', extensions: ['xlsx', 'xls', 'csv'] }],
       properties: ['openFile'],
     })
     if (canceled || !filePaths.length) return null
     const XLSX = require('xlsx')
     const wb = XLSX.readFile(filePaths[0])
-    const ws = wb.Sheets[wb.SheetNames[0]]
-    return sheetToJsonSkipBlanks(ws)
+    // Support template with Items/Cases sheets, or fall back to first sheet as items
+    const sheetNames = wb.SheetNames.map(n => n.trim().toLowerCase())
+    const itemsSheetIdx = sheetNames.findIndex(n => n === 'items' || n === 'item')
+    const casesSheetIdx = sheetNames.findIndex(n => n === 'cases' || n === 'case')
+
+    if (itemsSheetIdx !== -1 || casesSheetIdx !== -1) {
+      // Multi-sheet template format
+      const itemRows = itemsSheetIdx !== -1 ? sheetToJsonSkipBlanks(wb.Sheets[wb.SheetNames[itemsSheetIdx]]) : []
+      const caseRows = casesSheetIdx !== -1 ? sheetToJsonSkipBlanks(wb.Sheets[wb.SheetNames[casesSheetIdx]]) : []
+      return { format: 'template', itemRows, caseRows }
+    } else {
+      // Legacy: single sheet — treat all as items
+      const ws = wb.Sheets[wb.SheetNames[0]]
+      return { format: 'legacy', itemRows: sheetToJsonSkipBlanks(ws), caseRows: [] }
+    }
   })
 
-  ipcMain.handle('import:inventory', async () => {
-    const { canceled, filePaths } = await dialog.showOpenDialog({
-      title: 'Import from Inventory App (JSON/CSV)',
-      filters: [{ name: 'JSON', extensions: ['json'] }, { name: 'CSV', extensions: ['csv'] }],
-      properties: ['openFile'],
+  ipcMain.handle('export:template', async () => {
+    const { canceled, filePath } = await dialog.showSaveDialog({
+      title: 'Save Import Template',
+      defaultPath: 'propor-import-template.xlsx',
+      filters: [{ name: 'Excel Workbook', extensions: ['xlsx'] }],
     })
-    if (canceled || !filePaths.length) return null
-    return parseInventoryFile(filePaths[0])
-  })
+    if (canceled || !filePath) return null
 
-  ipcMain.handle('watch:setFolder', (_, folderPath) => {
-    const db = getDb()
-    db.data.settings.watch_folder = folderPath
-    db.save()
-    startWatcher(folderPath)
-    return true
-  })
+    const XLSX = require('xlsx')
+    const wb = XLSX.utils.book_new()
 
-  ipcMain.handle('watch:getFolder', () => {
-    return getDb().data.settings.watch_folder || null
+    // ── Items sheet ───────────────────────────────────────────────────
+    const itemHeaders = [
+      ['name', 'sku', 'barcode', 'serial', 'department', 'group', 'length', 'width', 'height',
+       'weight', 'quantity', 'can_rotate_lr', 'can_tip_side', 'can_flip',
+       'can_stack_on_others', 'allow_stacking_on_top', 'max_stack_qty', 'max_stack_weight', 'notes'],
+      ['Example Mixer', 'MX-001', '012345678901', 'SN12345', 'Audio', 'Stage Rack',
+       19, 14, 7, 22, 1, 1, 1, 1, 1, 1, 0, 50, 'Main FOH mixer'],
+      ['Cable Snake', 'SN-050', '098765432109', '', 'Audio', '',
+       24, 8, 8, 5, 4, 1, 1, 1, 1, 0, 0, 0, ''],
+    ]
+    const wsItems = XLSX.utils.aoa_to_sheet(itemHeaders)
+    // Style the header row as bold by setting column widths
+    wsItems['!cols'] = [
+      { wch: 22 }, { wch: 12 }, { wch: 14 }, { wch: 14 }, { wch: 14 }, { wch: 14 },
+      { wch: 8 }, { wch: 8 }, { wch: 8 }, { wch: 8 }, { wch: 8 },
+      { wch: 13 }, { wch: 12 }, { wch: 9 }, { wch: 18 }, { wch: 20 },
+      { wch: 14 }, { wch: 16 }, { wch: 24 },
+    ]
+    XLSX.utils.book_append_sheet(wb, wsItems, 'Items')
+
+    // ── Cases sheet ───────────────────────────────────────────────────
+    const caseHeaders = [
+      ['name', 'sku', 'barcode', 'serial', 'group', 'color', 'length', 'width', 'height',
+       'weight', 'can_rotate_lr', 'can_tip_side', 'can_flip',
+       'can_stack_on_others', 'allow_stacking_on_top', 'max_stack_weight', 'max_stack_qty', 'notes'],
+      ['Audio Road Case', 'ARC-001', '012345678901', '', 'Audio Cases',
+       '#4f8ef7', 24, 18, 20, 35, 1, 0, 0, 1, 1, 150, 2, 'Main audio case'],
+      ['Video Pelican', 'VID-002', '098765432109', 'P9988', 'Video Cases',
+       '#8b5cf6', 20, 16, 14, 18, 1, 0, 0, 1, 0, 0, 0, 'Camera & lenses'],
+    ]
+    const wsCases = XLSX.utils.aoa_to_sheet(caseHeaders)
+    wsCases['!cols'] = [
+      { wch: 22 }, { wch: 12 }, { wch: 14 }, { wch: 14 }, { wch: 14 }, { wch: 10 },
+      { wch: 8 }, { wch: 8 }, { wch: 8 }, { wch: 8 },
+      { wch: 13 }, { wch: 12 }, { wch: 9 }, { wch: 18 }, { wch: 20 },
+      { wch: 16 }, { wch: 14 }, { wch: 24 },
+    ]
+    XLSX.utils.book_append_sheet(wb, wsCases, 'Cases')
+
+    XLSX.writeFile(wb, filePath)
+    return filePath
   })
 
   ipcMain.handle('dialog:openFolder', async () => {

@@ -3,7 +3,7 @@ import {
   Package, Plus, Pencil, Trash2, X, Check, Upload, Download, Trash,
   AlertTriangle, ChevronDown, ChevronRight, FolderPlus, Layers, Search, GripVertical,
 } from 'lucide-react'
-import { detectMapping, applyMapping } from '../utils/excelImport'
+import { detectMapping, applyMapping, detectCaseMapping, applyCaseMapping } from '../utils/excelImport'
 
 const COLORS = [
   '#4f8ef7', '#8b5cf6', '#ec4899', '#14b8a6', '#f59e0b',
@@ -12,14 +12,14 @@ const COLORS = [
 ]
 
 const DEFAULT_ITEM = {
-  name: '', sku: '', serial: '', department_id: '', group_id: '',
+  name: '', sku: '', barcode: '', serial: '', department_id: '', group_id: '',
   length: 12, width: 12, height: 12, weight: 0, quantity: 1, notes: '',
   can_rotate_lr: 1, can_tip_side: 1, can_flip: 1,
   can_stack_on_others: 1, allow_stacking_on_top: 1, max_stack_weight: 0,
   unique_serials: 0,
 }
 const DEFAULT_CASE = {
-  name: '', sku: '', serial: '', group_id: '',
+  name: '', sku: '', barcode: '', serial: '', group_id: '',
   length: 24, width: 24, height: 24, weight: 0,
   color: '#f59e0b', notes: '', items: [],
   can_rotate_lr: 1, can_tip_side: 1, can_flip: 1,
@@ -305,24 +305,37 @@ export default function Items() {
 
   // ── Import ─────────────────────────────────────────────────────────
   const startImport = async () => {
-    const rows = await api.importExcel()
-    if (!rows?.length) return
-    const cols = Object.keys(rows[0])
-    setImportModal({ rows, columns: cols, mapping: detectMapping(cols) })
+    const result = await api.importExcel()
+    if (!result) return
+    const { itemRows = [], caseRows = [] } = result
+    const itemCols = itemRows.length ? Object.keys(itemRows[0]) : []
+    const caseCols = caseRows.length ? Object.keys(caseRows[0]) : []
+    setImportModal({
+      itemRows, caseRows,
+      itemColumns: itemCols, caseColumns: caseCols,
+      itemMapping: detectMapping(itemCols),
+      caseMapping: detectCaseMapping(caseCols),
+      tab: itemRows.length > 0 ? 'items' : 'cases',
+    })
   }
-  const startInventoryImport = async () => {
-    const data = await api.importInventoryFile()
-    if (!data || data.error) { alert(data?.error || 'Import failed'); return }
-    const rows = Array.isArray(data) ? data : [data]
-    const cols = Object.keys(rows[0] || {})
-    setImportModal({ rows, columns: cols, mapping: detectMapping(cols) })
+  const downloadTemplate = async () => {
+    await api.exportTemplate()
   }
   const confirmImport = async () => {
-    const { rows, mapping } = importModal
-    const mapped = applyMapping(rows, mapping)
-    for (const item of mapped) {
-      const dept = depts.find(d => d.name.toLowerCase() === (item.department || '').toLowerCase())
-      await api.saveItem({ ...item, department_id: dept ? dept.id : null })
+    const { itemRows, caseRows, itemMapping, caseMapping } = importModal
+    if (itemRows.length) {
+      const mapped = applyMapping(itemRows, itemMapping)
+      for (const item of mapped) {
+        const dept = depts.find(d => d.name.toLowerCase() === (item.department || '').toLowerCase())
+        await api.saveItem({ ...item, department_id: dept ? dept.id : null })
+      }
+    }
+    if (caseRows.length) {
+      const mappedCases = applyCaseMapping(caseRows, caseMapping)
+      for (const c of mappedCases) {
+        const grp = groups.find(g => g.name.toLowerCase() === (c.group || '').toLowerCase())
+        await api.cases.save({ ...c, group_id: grp ? grp.id : null })
+      }
     }
     setImportModal(null); loadAll()
   }
@@ -455,7 +468,7 @@ export default function Items() {
           <p className="text-gray-400 text-sm mt-1">{items.length} items · {totalUnits} units total</p>
         </div>
         <div className="flex items-center gap-2 flex-wrap justify-end">
-          <button onClick={startInventoryImport} className="btn-secondary"><Download size={14} /> From Inventory</button>
+          <button onClick={downloadTemplate} className="btn-secondary"><Download size={14} /> Template</button>
           <button onClick={startImport} className="btn-secondary"><Upload size={14} /> Import Excel</button>
           {items.length > 0 && <button onClick={() => setConfirmClearModal(true)} className="btn-danger"><Trash size={14} /> Clear All</button>}
           <button onClick={() => openNewGroup(null)} className="btn-secondary"><FolderPlus size={14} /> Create Group</button>
@@ -757,30 +770,36 @@ export default function Items() {
               </div>
               {!itemForm.unique_serials && (
                 <div>
-                  <label className="label">Barcode / SKU</label>
+                  <label className="label">SKU / Code</label>
                   <input className="input-field" value={itemForm.sku || ''}
                     placeholder="e.g. AUD-001"
                     onChange={e => setI('sku', e.target.value)} />
                 </div>
               )}
             </div>
-            <div className={itemForm.unique_serials ? '' : 'grid grid-cols-2 gap-3'}>
-              <div>
-                <label className="label">Department</label>
-                <select className="input-field" value={itemForm.department_id || ''}
-                  onChange={e => setI('department_id', e.target.value || null)}>
-                  <option value="">— None —</option>
-                  {depts.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
-                </select>
-              </div>
-              {!itemForm.unique_serials && (
+            {!itemForm.unique_serials && (
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="label">Barcode</label>
+                  <input className="input-field" value={itemForm.barcode || ''}
+                    placeholder="Scan or type barcode"
+                    onChange={e => setI('barcode', e.target.value)} />
+                </div>
                 <div>
                   <label className="label">Serial Number</label>
                   <input className="input-field" value={itemForm.serial || ''}
                     placeholder="e.g. SN-2024-001"
                     onChange={e => setI('serial', e.target.value)} />
                 </div>
-              )}
+              </div>
+            )}
+            <div>
+              <label className="label">Department</label>
+              <select className="input-field" value={itemForm.department_id || ''}
+                onChange={e => setI('department_id', e.target.value || null)}>
+                <option value="">— None —</option>
+                {depts.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
+              </select>
             </div>
             <div>
               <label className="label">Group</label>
@@ -949,9 +968,14 @@ export default function Items() {
             {!caseForm.unique_serials && (
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="label">Barcode / SKU</label>
+                  <label className="label">SKU / Code</label>
                   <input className="input-field" value={caseForm.sku || ''} placeholder="Optional"
                     onChange={e => setC('sku', e.target.value)} />
+                </div>
+                <div>
+                  <label className="label">Barcode</label>
+                  <input className="input-field" value={caseForm.barcode || ''} placeholder="Scan or type barcode"
+                    onChange={e => setC('barcode', e.target.value)} />
                 </div>
                 <div>
                   <label className="label">Serial Number</label>
@@ -1169,31 +1193,82 @@ export default function Items() {
       )}
 
       {/* ── Import Modal ─────────────────────────────────────────────── */}
-      {importModal && (
-        <Modal title={`Map Columns — ${importModal.rows.length} rows`} onClose={() => setImportModal(null)}>
-          <div className="p-5 space-y-3">
-            <p className="text-gray-400 text-sm">Map your spreadsheet columns to item fields. Auto-detected where possible.</p>
-            <div className="grid grid-cols-2 gap-3">
-              {Object.entries({
-                name: 'Item Name *', sku: 'SKU/Case #', department: 'Department',
-                length: 'Length', width: 'Width', height: 'Height',
-                weight: 'Weight', quantity: 'Quantity',
-              }).map(([field, label]) => (
-                <div key={field}>
-                  <label className="label">{label}</label>
-                  <select className="input-field" value={importModal.mapping[field] || ''}
-                    onChange={e => setImportModal(m => ({ ...m, mapping: { ...m.mapping, [field]: e.target.value || undefined } }))}>
-                    <option value="">— skip —</option>
-                    {importModal.columns.map(c => <option key={c} value={c}>{c}</option>)}
-                  </select>
-                </div>
-              ))}
+      {importModal && (() => {
+        const isItems = importModal.tab === 'items'
+        const totalItems = importModal.itemRows.length
+        const totalCases = importModal.caseRows.length
+        return (
+          <Modal
+            title={`Import — ${totalItems} item${totalItems !== 1 ? 's' : ''}, ${totalCases} case${totalCases !== 1 ? 's' : ''}`}
+            onClose={() => setImportModal(null)}
+          >
+            {/* Tab bar */}
+            <div className="flex border-b border-dark-500 px-5 pt-3 gap-1">
+              {totalItems > 0 && (
+                <button
+                  onClick={() => setImportModal(m => ({ ...m, tab: 'items' }))}
+                  className={`px-4 py-1.5 text-sm rounded-t font-medium transition-colors ${
+                    isItems ? 'bg-dark-600 text-white border border-b-transparent border-dark-500' : 'text-white/50 hover:text-white'
+                  }`}
+                >
+                  Items ({totalItems})
+                </button>
+              )}
+              {totalCases > 0 && (
+                <button
+                  onClick={() => setImportModal(m => ({ ...m, tab: 'cases' }))}
+                  className={`px-4 py-1.5 text-sm rounded-t font-medium transition-colors ${
+                    !isItems ? 'bg-dark-600 text-white border border-b-transparent border-dark-500' : 'text-white/50 hover:text-white'
+                  }`}
+                >
+                  Cases ({totalCases})
+                </button>
+              )}
             </div>
-          </div>
-          <ModalFooter onCancel={() => setImportModal(null)} onSave={confirmImport}
-            saveLabel={<><Check size={14} /> Import {importModal.rows.length} Items</>} />
-        </Modal>
-      )}
+            <div className="p-5 space-y-3">
+              <p className="text-gray-400 text-sm">Map spreadsheet columns to fields. Auto-detected where possible.</p>
+              {isItems ? (
+                <div className="grid grid-cols-2 gap-3">
+                  {Object.entries({
+                    name: 'Item Name *', sku: 'SKU / Code', barcode: 'Barcode', serial: 'Serial #',
+                    department: 'Department', length: 'Length', width: 'Width', height: 'Height',
+                    weight: 'Weight', quantity: 'Quantity',
+                    max_stack_qty: 'Max Stack Qty', max_stack_weight: 'Max Stack Weight',
+                  }).map(([field, label]) => (
+                    <div key={field}>
+                      <label className="label">{label}</label>
+                      <select className="input-field" value={importModal.itemMapping[field] || ''}
+                        onChange={e => setImportModal(m => ({ ...m, itemMapping: { ...m.itemMapping, [field]: e.target.value || undefined } }))}>
+                        <option value="">— skip —</option>
+                        {importModal.itemColumns.map(c => <option key={c} value={c}>{c}</option>)}
+                      </select>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="grid grid-cols-2 gap-3">
+                  {Object.entries({
+                    name: 'Case Name *', sku: 'SKU / Code', barcode: 'Barcode', serial: 'Serial #',
+                    group: 'Group', color: 'Color (hex)', length: 'Length', width: 'Width',
+                    height: 'Height', weight: 'Weight',
+                  }).map(([field, label]) => (
+                    <div key={field}>
+                      <label className="label">{label}</label>
+                      <select className="input-field" value={importModal.caseMapping[field] || ''}
+                        onChange={e => setImportModal(m => ({ ...m, caseMapping: { ...m.caseMapping, [field]: e.target.value || undefined } }))}>
+                        <option value="">— skip —</option>
+                        {importModal.caseColumns.map(c => <option key={c} value={c}>{c}</option>)}
+                      </select>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+            <ModalFooter onCancel={() => setImportModal(null)} onSave={confirmImport}
+              saveLabel={<><Check size={14} /> Import{totalItems > 0 ? ` ${totalItems} Items` : ''}{totalItems > 0 && totalCases > 0 ? ' &' : ''}{totalCases > 0 ? ` ${totalCases} Cases` : ''}</>} />
+          </Modal>
+        )
+      })()}
     </div>
   )
 }

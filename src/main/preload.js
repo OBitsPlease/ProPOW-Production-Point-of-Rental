@@ -29,11 +29,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   // Excel Import
   importExcel: () => ipcRenderer.invoke('import:excel'),
-
-  // Inventory Integration
-  importInventoryFile: () => ipcRenderer.invoke('import:inventory'),
-  setWatchFolder: (folderPath) => ipcRenderer.invoke('watch:setFolder', folderPath),
-  getWatchFolder: () => ipcRenderer.invoke('watch:getFolder'),
+  exportTemplate: () => ipcRenderer.invoke('export:template'),
 
   // PDF Export
   exportPDF: (planId) => ipcRenderer.invoke('export:pdf', planId),
@@ -44,14 +40,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Native confirm dialog (replaces window.confirm to avoid Electron focus bug)
   dialog: {
     confirm: (message, detail) => ipcRenderer.invoke('dialog:confirm', { message, detail }),
-  },
-
-  // Events from main → renderer
-  onInventoryImported: (cb) => ipcRenderer.on('inventory:imported', (_, data) => cb(data)),
-  onInventoryError: (cb) => ipcRenderer.on('inventory:error', (_, err) => cb(err)),
-  removeInventoryListeners: () => {
-    ipcRenderer.removeAllListeners('inventory:imported')
-    ipcRenderer.removeAllListeners('inventory:error')
   },
 
   repack: {
