@@ -329,9 +329,25 @@ export default function Items() {
   }
   const confirmImport = async () => {
     const { itemRows, caseRows, itemMapping, caseMapping } = importModal
+    let skippedItems = 0
+    let skippedCases = 0
+
+    // Build sets of existing serials/barcodes for fast lookup (ignore empty strings)
+    const existingItemSerials  = new Set(items.map(i => i.serial).filter(Boolean))
+    const existingItemBarcodes = new Set(items.map(i => i.barcode).filter(Boolean))
+    const existingCaseSerials  = new Set(cases.map(c => c.serial).filter(Boolean))
+    const existingCaseBarcodes = new Set(cases.map(c => c.barcode).filter(Boolean))
+
     if (itemRows.length) {
       const mapped = applyMapping(itemRows, itemMapping)
       for (const item of mapped) {
+        const serial  = (item.serial  || '').trim()
+        const barcode = (item.barcode || '').trim()
+        if ((serial  && existingItemSerials.has(serial)) ||
+            (barcode && existingItemBarcodes.has(barcode))) {
+          skippedItems++
+          continue
+        }
         const dept = depts.find(d => d.name.toLowerCase() === (item.department || '').toLowerCase())
         await api.saveItem({ ...item, department_id: dept ? dept.id : null })
       }
@@ -339,11 +355,29 @@ export default function Items() {
     if (caseRows.length) {
       const mappedCases = applyCaseMapping(caseRows, caseMapping)
       for (const c of mappedCases) {
+        const serial  = (c.serial  || '').trim()
+        const barcode = (c.barcode || '').trim()
+        if ((serial  && existingCaseSerials.has(serial)) ||
+            (barcode && existingCaseBarcodes.has(barcode))) {
+          skippedCases++
+          continue
+        }
         const grp = groups.find(g => g.name.toLowerCase() === (c.group || '').toLowerCase())
         await api.cases.save({ ...c, group_id: grp ? grp.id : null })
       }
     }
-    setImportModal(null); loadAll()
+
+    setImportModal(null)
+    loadAll()
+    if (skippedItems > 0 || skippedCases > 0) {
+      const parts = []
+      if (skippedItems > 0) parts.push(`${skippedItems} item${skippedItems !== 1 ? 's' : ''}`)
+      if (skippedCases > 0) parts.push(`${skippedCases} case${skippedCases !== 1 ? 's' : ''}`)
+      await api.dialog.confirm(
+        `${parts.join(' and ')} skipped`,
+        'These already exist in the library (matched by serial number or barcode) and were not imported.'
+      )
+    }
   }
   const clearAll = async () => {
     await api.clearItems()
