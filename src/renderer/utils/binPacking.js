@@ -153,6 +153,11 @@ export function runBinPacking(items, truck) {
   }
 
   units.sort((a, b) => {
+    // 0. "first_off" (Near Door) cases pack last — they end up closest to the door
+    const aZone = a.load_zone === 'first_off' ? 1 : 0
+    const bZone = b.load_zone === 'first_off' ? 1 : 0
+    if (aZone !== bZone) return aZone - bZone
+
     // 1. Tallest first — tall cases go deepest into the cab end
     const aH = Math.max(a.length, a.width, a.height)
     const bH = Math.max(b.length, b.width, b.height)
@@ -182,6 +187,7 @@ export function runBinPacking(items, truck) {
   function placeUnit(unit) {
     const canStackOnOthers = unit.can_stack_on_others !== 0 && unit.can_stack_on_others !== false
     const noStackOnTop     = unit.allow_stacking_on_top === 0 || unit.allow_stacking_on_top === false
+    const floorOnly        = unit.load_zone === 'floor_only'
     const orientations = getOrientations(unit)
     const unitWeight = unit.weight || 0
 
@@ -216,17 +222,26 @@ export function runBinPacking(items, truck) {
       return a.y - b.y
     })
 
-    for (const ep of eps) {
+    // floor_only: try floor EPs first; only use stacked EPs if no floor position works
+    const floorEps   = floorOnly ? eps.filter(ep => ep.z <= 0.001) : null
+    const epsToTry   = floorOnly && floorEps.length > 0 ? floorEps : eps
+    const epsAllowStack = !floorOnly || floorEps.length === 0
+
+    for (const ep of epsToTry) {
       for (const ori of orientations) {
         const { l: bl, w: bw, h: bh, isRotated, isTipped } = ori
 
         if (!canStackOnOthers && ep.z > 0.001) continue
+        // floor_only: skip elevated EPs when floor space exists
+        if (!epsAllowStack && ep.z > 0.001) continue
 
         const floorZ = projectToFloor(ep.x, ep.y, bl, bw, packed)
         const candidateZs = [...new Set([floorZ, ep.z])].sort((a, b) => a - b)
 
         for (const cz of candidateZs) {
           if (!canStackOnOthers && cz > 0.001) continue
+          // floor_only: skip stacking when floor space exists
+          if (!epsAllowStack && cz > 0.001) continue
           if (!fitsInTruck(ep.x, ep.y, cz, bl, bw, bh, truck)) continue
           if (overlaps(ep.x, ep.y, cz, bl, bw, bh, packed)) continue
 

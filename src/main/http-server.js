@@ -170,6 +170,11 @@ const BROWSER_API_SCRIPT = `
       onError:            () => {},
       removeListeners:    () => {},
     },
+    tunnel: {
+      getUrl:         () => Promise.resolve(null),
+      onUrlReady:     () => {},
+      removeListeners:() => {},
+    },
   };
 })();
 </script>
@@ -398,6 +403,7 @@ async function handleApi(req, res, pathname, searchParams) {
             can_stack_on_others: c.can_stack_on_others !== undefined ? c.can_stack_on_others : 1,
             allow_stacking_on_top: c.allow_stacking_on_top !== undefined ? c.allow_stacking_on_top : 1,
             max_stack_weight: c.max_stack_weight || 0, max_stack_qty: c.max_stack_qty || 0,
+            load_zone: c.load_zone || '',
             notes: c.notes || '', created_at: new Date().toISOString() })
           db.save(); return sendJson(res, id)
         }
@@ -582,6 +588,7 @@ function handleStatic(req, res, distDir) {
     const indexPath = path.join(distDir, 'index.html')
     if (!fs.existsSync(indexPath)) { res.writeHead(404); return res.end('Not found') }
     let html = fs.readFileSync(indexPath, 'utf8')
+    html = html.replace(/<meta http-equiv="Content-Security-Policy"[^>]*>/i, '')
     html = html.replace('</head>', BROWSER_API_SCRIPT + '</head>')
     res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' })
     return res.end(html)
@@ -591,7 +598,9 @@ function handleStatic(req, res, distDir) {
 
   if (urlPath === '/index.html') {
     // Inject browser API polyfill before </head>
+    // Also strip the Electron-only CSP meta tag — it blocks fonts/workers in real browsers
     let html = fs.readFileSync(filePath, 'utf8')
+    html = html.replace(/<meta http-equiv="Content-Security-Policy"[^>]*>/i, '')
     html = html.replace('</head>', BROWSER_API_SCRIPT + '</head>')
     res.writeHead(200, { 'Content-Type': mime })
     return res.end(html)

@@ -25,7 +25,14 @@ const DEFAULT_CASE = {
   can_rotate_lr: 1, can_tip_side: 1, can_flip: 1,
   can_stack_on_others: 1, allow_stacking_on_top: 1,
   max_stack_qty: 0, max_stack_weight: 0,
+  load_zone: '',
 }
+
+const LOAD_ZONE_OPTIONS = [
+  { value: '',           label: 'Auto',             desc: 'Algorithm decides placement',                          color: 'text-gray-400',  bg: 'bg-gray-500/10',  border: 'border-gray-500/30' },
+  { value: 'first_off',  label: 'Near Door / First Off', desc: 'Loaded last — unloaded first, placed near the door', color: 'text-green-400', bg: 'bg-green-500/10', border: 'border-green-500/30' },
+  { value: 'floor_only', label: 'Floor Only',        desc: 'Never stacked unless there is no floor space left',   color: 'text-blue-400',  bg: 'bg-blue-500/10',  border: 'border-blue-500/30' },
+]
 const DEFAULT_GROUP = { name: '', color: '#4f8ef7' }
 
 function ColorPicker({ value, onChange }) {
@@ -802,6 +809,8 @@ export default function Items() {
                               <span className="text-xs text-white/40 font-mono whitespace-nowrap">{c.length}×{c.width}×{c.height}"</span>
                               <span className="text-xs text-white/40 whitespace-nowrap">{c.weight} lbs</span>
                               {c.items?.length > 0 && <span className="text-xs text-white/40 whitespace-nowrap">{c.items.length} item{c.items.length !== 1 ? 's' : ''}</span>}
+                              {c.load_zone === 'first_off' && <span className="text-xs px-1.5 py-0.5 rounded border border-green-500/30 bg-green-500/10 text-green-400 font-medium whitespace-nowrap">Near Door</span>}
+                              {c.load_zone === 'floor_only' && <span className="text-xs px-1.5 py-0.5 rounded border border-blue-500/30 bg-blue-500/10 text-blue-400 font-medium whitespace-nowrap">Floor Only</span>}
                               <div className="flex items-center gap-1 opacity-0 group-hover/crow:opacity-100 transition-opacity flex-shrink-0" onClick={e => e.stopPropagation()}>
                                 {c.items?.length > 0 && <button onClick={() => emptyCase(c)} className="text-xs px-2 py-0.5 rounded border border-orange-500/40 text-orange-400 hover:bg-orange-500/20 hover:border-orange-400/60 transition-colors">Empty</button>}
                                 <button onClick={() => openEditCase(c)} className="p-1 text-white/40 hover:text-white rounded hover:bg-white/10"><Pencil size={13} /></button>
@@ -852,6 +861,8 @@ export default function Items() {
                                         <span className="text-xs text-white/40 font-mono whitespace-nowrap">{c.length}×{c.width}×{c.height}"</span>
                                         <span className="text-xs text-white/40 whitespace-nowrap">{c.weight} lbs</span>
                                         {c.items?.length > 0 && <span className="text-xs text-white/40 whitespace-nowrap">{c.items.length} item{c.items.length !== 1 ? 's' : ''}</span>}
+                                        {c.load_zone === 'first_off' && <span className="text-xs px-1.5 py-0.5 rounded border border-green-500/30 bg-green-500/10 text-green-400 font-medium whitespace-nowrap">Near Door</span>}
+                                        {c.load_zone === 'floor_only' && <span className="text-xs px-1.5 py-0.5 rounded border border-blue-500/30 bg-blue-500/10 text-blue-400 font-medium whitespace-nowrap">Floor Only</span>}
                                         <div className="flex items-center gap-1 opacity-0 group-hover/crow:opacity-100 transition-opacity flex-shrink-0" onClick={e => e.stopPropagation()}>
                                           {c.items?.length > 0 && <button onClick={() => emptyCase(c)} className="text-xs px-2 py-0.5 rounded border border-orange-500/40 text-orange-400 hover:bg-orange-500/20 hover:border-orange-400/60 transition-colors">Empty</button>}
                                           <button onClick={() => openEditCase(c)} className="p-1 text-white/40 hover:text-white rounded hover:bg-white/10"><Pencil size={13} /></button>
@@ -898,6 +909,8 @@ export default function Items() {
                                               <span className="text-xs text-white/40 font-mono whitespace-nowrap">{c.length}×{c.width}×{c.height}"</span>
                                               <span className="text-xs text-white/40 whitespace-nowrap">{c.weight} lbs</span>
                                               {c.items?.length > 0 && <span className="text-xs text-white/40 whitespace-nowrap">{c.items.length} item{c.items.length !== 1 ? 's' : ''}</span>}
+                                              {c.load_zone === 'first_off' && <span className="text-xs px-1.5 py-0.5 rounded border border-green-500/30 bg-green-500/10 text-green-400 font-medium whitespace-nowrap">Near Door</span>}
+                                              {c.load_zone === 'floor_only' && <span className="text-xs px-1.5 py-0.5 rounded border border-blue-500/30 bg-blue-500/10 text-blue-400 font-medium whitespace-nowrap">Floor Only</span>}
                                               <div className="flex items-center gap-1 opacity-0 group-hover/crow:opacity-100 transition-opacity flex-shrink-0" onClick={e => e.stopPropagation()}>
                                                 {c.items?.length > 0 && <button onClick={() => emptyCase(c)} className="text-xs px-2 py-0.5 rounded border border-orange-500/40 text-orange-400 hover:bg-orange-500/20 hover:border-orange-400/60 transition-colors">Empty</button>}
                                                 <button onClick={() => openEditCase(c)} className="p-1 text-white/40 hover:text-white rounded hover:bg-white/10"><Pencil size={13} /></button>
@@ -946,6 +959,8 @@ export default function Items() {
                   <span className="text-xs text-white/40 font-mono whitespace-nowrap">{c.length}×{c.width}×{c.height}"</span>
                   <span className="text-xs text-white/40 whitespace-nowrap">{c.weight} lbs</span>
                   {c.items?.length > 0 && <span className="text-xs text-white/40 whitespace-nowrap">{c.items.length} item{c.items.length !== 1 ? 's' : ''}</span>}
+                  {c.load_zone === 'first_off' && <span className="text-xs px-1.5 py-0.5 rounded border border-green-500/30 bg-green-500/10 text-green-400 font-medium whitespace-nowrap">Near Door</span>}
+                  {c.load_zone === 'floor_only' && <span className="text-xs px-1.5 py-0.5 rounded border border-blue-500/30 bg-blue-500/10 text-blue-400 font-medium whitespace-nowrap">Floor Only</span>}
                   <div className="flex items-center gap-1 opacity-0 group-hover/crow:opacity-100 transition-opacity flex-shrink-0" onClick={e => e.stopPropagation()}>
                     {c.items?.length > 0 && <button onClick={() => emptyCase(c)} className="text-xs px-2 py-0.5 rounded border border-orange-500/40 text-orange-400 hover:bg-orange-500/20 hover:border-orange-400/60 transition-colors">Empty</button>}
                     <button onClick={() => openEditCase(c)} className="p-1 text-white/40 hover:text-white rounded hover:bg-white/10"><Pencil size={13} /></button>
@@ -1184,6 +1199,27 @@ export default function Items() {
                     value={caseForm.max_stack_qty || 0}
                     onChange={e => setC('max_stack_qty', parseInt(e.target.value) || 0)} />
                 </div>
+              </div>
+            </div>
+            <div>
+              <p className="text-sm font-semibold text-white mb-2">Truck Load Zone</p>
+              <p className="text-xs text-white/40 mb-2">Controls where this case is placed in the truck during load planning.</p>
+              <div className="space-y-1.5">
+                {LOAD_ZONE_OPTIONS.map(opt => (
+                  <label key={opt.value} className={`flex items-start gap-3 p-3 rounded-lg border cursor-pointer select-none transition-colors ${
+                    caseForm.load_zone === opt.value
+                      ? `${opt.border} ${opt.bg}`
+                      : 'border-white/10 bg-white/5 hover:bg-white/8'
+                  }`}>
+                    <input type="radio" name="load_zone" className="mt-0.5 flex-shrink-0 accent-amber-400"
+                      checked={caseForm.load_zone === opt.value}
+                      onChange={() => setC('load_zone', opt.value)} />
+                    <div>
+                      <p className={`text-sm font-semibold ${caseForm.load_zone === opt.value ? opt.color : 'text-white/80'}`}>{opt.label}</p>
+                      <p className="text-xs text-white/40">{opt.desc}</p>
+                    </div>
+                  </label>
+                ))}
               </div>
             </div>
             <div>

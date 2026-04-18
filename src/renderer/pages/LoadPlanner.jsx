@@ -247,7 +247,9 @@ export default function LoadPlanner() {
                     style={{ backgroundColor: c.color || '#f59e0b' }}
                   />
                   <span className="flex-1 truncate">{c.name}</span>
-                  <span className="text-gray-500">{c.weight > 0 ? `${c.weight}lbs` : ''}</span>
+                  {c.load_zone === 'first_off' && <span className="text-xs px-1 py-0.5 rounded border border-green-500/30 bg-green-500/10 text-green-400 font-medium shrink-0">Near Door</span>}
+                  {c.load_zone === 'floor_only' && <span className="text-xs px-1 py-0.5 rounded border border-blue-500/30 bg-blue-500/10 text-blue-400 font-medium shrink-0">Floor Only</span>}
+                  <span className="text-gray-500 shrink-0">{c.weight > 0 ? `${c.weight}lbs` : ''}</span>
                 </div>
               ))
             )}

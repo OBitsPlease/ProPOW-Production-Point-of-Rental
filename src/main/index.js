@@ -196,8 +196,14 @@ async function prepareCloudflaredBin() {
 }
 
 // Spawn cloudflared and wire up stdout/stderr to capture the tunnel URL
+let _tunnelBin = null
+let _tunnelUrlFile = null
+let _tunnelRestarting = false
+
 function spawnTunnel(bin, urlFile) {
-  cloudflaredProcess = spawn(bin, ['tunnel', '--url', `http://localhost:${HTTP_PORT}`], {
+  _tunnelBin = bin
+  _tunnelUrlFile = urlFile
+  cloudflaredProcess = spawn(bin, ['tunnel', '--no-autoupdate', '--protocol', 'http2', '--url', `http://localhost:${HTTP_PORT}`], {
     stdio: ['ignore', 'pipe', 'pipe'],
   })
 
@@ -245,6 +251,18 @@ function spawnTunnel(bin, urlFile) {
   cloudflaredProcess.on('exit', (code) => {
     console.log('[cloudflared] Exited with code', code)
     cloudflaredProcess = null
+    // Auto-restart unless the app is quitting or we already scheduled a restart
+    if (!_tunnelRestarting && _tunnelBin && !app.isQuitting) {
+      _tunnelRestarting = true
+      console.log('[cloudflared] Will restart in 3 seconds...')
+      setTimeout(() => {
+        _tunnelRestarting = false
+        if (_tunnelBin && !app.isQuitting) {
+          console.log('[cloudflared] Restarting...')
+          spawnTunnel(_tunnelBin, _tunnelUrlFile)
+        }
+      }, 3000)
+    }
   })
 }
 
@@ -412,6 +430,8 @@ app.on('window-all-closed', () => {
 })
 
 app.on('will-quit', () => {
+  app.isQuitting = true
+  _tunnelBin = null
   if (cloudflaredProcess) {
     cloudflaredProcess.kill()
     cloudflaredProcess = null
