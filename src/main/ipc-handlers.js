@@ -916,6 +916,50 @@ function startWatcher(folderPath) {
       }
     }
   })
+
+  // ── Stack Preferences ─────────────────────────────────────────────────────────
+  // Records which cases the user manually chose to stack together, building a
+  // growing database of preferred stacking pairs for the bin packing algorithm.
+  ipcMain.handle('stackPrefs:getAll', () => {
+    const db = getDb()
+    if (!db.data.stack_prefs) db.data.stack_prefs = []
+    return [...db.data.stack_prefs]
+  })
+
+  ipcMain.handle('stackPrefs:save', (_, pref) => {
+    // pref: { bottom_case_id, top_case_id, bottom_name, top_name }
+    const db = getDb()
+    if (!db.data.stack_prefs) db.data.stack_prefs = []
+    // Find existing record for this pair
+    const existing = db.data.stack_prefs.find(p =>
+      p.bottom_case_id === pref.bottom_case_id && p.top_case_id === pref.top_case_id
+    )
+    if (existing) {
+      existing.count = (existing.count || 1) + 1
+      existing.last_used = new Date().toISOString()
+    } else {
+      db.data.stack_prefs.push({
+        id: db.nextId('stack_prefs'),
+        bottom_case_id: pref.bottom_case_id,
+        top_case_id: pref.top_case_id,
+        bottom_name: pref.bottom_name || '',
+        top_name: pref.top_name || '',
+        count: 1,
+        created_at: new Date().toISOString(),
+        last_used: new Date().toISOString(),
+      })
+    }
+    db.save()
+    return true
+  })
+
+  ipcMain.handle('stackPrefs:delete', (_, id) => {
+    const db = getDb()
+    if (!db.data.stack_prefs) return true
+    db.data.stack_prefs = db.data.stack_prefs.filter(p => p.id !== id)
+    db.save()
+    return true
+  })
 }
 
 module.exports = { registerIpcHandlers }

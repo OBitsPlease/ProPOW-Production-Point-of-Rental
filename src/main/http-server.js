@@ -175,6 +175,11 @@ const BROWSER_API_SCRIPT = `
       onUrlReady:     () => {},
       removeListeners:() => {},
     },
+    stackPrefs: {
+      getAll:  () => apiFetch('GET',    '/api/stack_prefs'),
+      save:    (pref) => apiFetch('POST',   '/api/stack_prefs', pref),
+      delete:  (id)   => apiFetch('DELETE', '/api/stack_prefs/' + id),
+    },
   };
 })();
 </script>
@@ -557,6 +562,34 @@ async function handleApi(req, res, pathname, searchParams) {
           db.data.case_repacks.push({ ...payload, id })
           db.save(); return sendJson(res, id)
         }
+      }
+    }
+
+    // ── Stack Preferences ─────────────────────────────────────────────────
+    if (seg[0] === 'stack_prefs') {
+      if (!db.data.stack_prefs) db.data.stack_prefs = []
+      if (method === 'GET') return sendJson(res, db.data.stack_prefs)
+      if (method === 'DELETE' && seg[1]) {
+        db.data.stack_prefs = db.data.stack_prefs.filter(p => p.id !== parseInt(seg[1]))
+        db.save(); return sendJson(res, true)
+      }
+      if (method === 'POST') {
+        const pref = await readBody(req)
+        const existing = db.data.stack_prefs.find(p =>
+          p.bottom_case_id === pref.bottom_case_id && p.top_case_id === pref.top_case_id
+        )
+        if (existing) {
+          existing.count = (existing.count || 1) + 1
+          existing.last_used = new Date().toISOString()
+          db.save(); return sendJson(res, true)
+        }
+        const max = db.data.stack_prefs.reduce((m, p) => Math.max(m, p.id || 0), 0)
+        db.data.stack_prefs.push({
+          id: max + 1, bottom_case_id: pref.bottom_case_id, top_case_id: pref.top_case_id,
+          bottom_name: pref.bottom_name || '', top_name: pref.top_name || '',
+          count: 1, created_at: new Date().toISOString(), last_used: new Date().toISOString(),
+        })
+        db.save(); return sendJson(res, true)
       }
     }
 

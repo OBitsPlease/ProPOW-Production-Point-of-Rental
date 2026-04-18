@@ -10,6 +10,9 @@
  *   allow_stacking_on_top— other items may be placed on top of this item
  *   max_stack_weight     — max lbs resting on this item (0 = unlimited)
  *
+ * stackPrefs (optional array) — user-defined preferred stacking pairs from the DB:
+ *   { bottom_case_id, top_case_id, count } — higher count = stronger preference
+ *
  * Returns: { packed, unpacked, utilization, totalWeight, callSheet }
  */
 
@@ -135,7 +138,19 @@ function getExtremePoints(placed, truck) {
   })
 }
 
-export function runBinPacking(items, truck) {
+export function runBinPacking(items, truck, stackPrefs = []) {
+  // Build a fast lookup: bottom_case_id → Set of preferred top_case_ids (sorted by count desc)
+  const prefMap = new Map() // bottomId → Map<topId, count>
+  for (const p of stackPrefs) {
+    if (!prefMap.has(p.bottom_case_id)) prefMap.set(p.bottom_case_id, new Map())
+    prefMap.get(p.bottom_case_id).set(p.top_case_id, p.count || 1)
+  }
+
+  // Helper: does placing `topUnit` on top of `bottomUnit` match a known pref?
+  const hasPref = (topUnit, bottomUnit) => {
+    const m = prefMap.get(bottomUnit.id)
+    return m ? (m.get(topUnit.id) || 0) : 0
+  }
   // Expand items by quantity into individual unit entries
   const units = []
   for (const item of items) {
@@ -205,10 +220,17 @@ export function runBinPacking(items, truck) {
       const aStacked = a.z > 0.001
       const bStacked = b.z > 0.001
 
-      // Highest priority: stacking on a matching similar case already placed.
+      // Highest priority: user-preferred stacking pair (learned from manual overrides)
+      const aTop = aStacked ? topAt(a) : null
+      const bTop = bStacked ? topAt(b) : null
+      const aPref = aTop ? hasPref(unit, aTop) : 0
+      const bPref = bTop ? hasPref(unit, bTop) : 0
+      if (aPref !== bPref) return bPref - aPref  // higher pref score first
+
+      // Second priority: stacking on a matching similar case already placed.
       // This proactively pairs like-cases before grabbing new floor space.
-      const aSim = aStacked && isSimilar(unit, topAt(a))
-      const bSim = bStacked && isSimilar(unit, topAt(b))
+      const aSim = aStacked && isSimilar(unit, aTop)
+      const bSim = bStacked && isSimilar(unit, bTop)
       if (aSim && !bSim) return -1
       if (!aSim && bSim) return 1
 

@@ -1,7 +1,7 @@
-import { useEffect, useState, useCallback } from 'react'
+import { useEffect, useState, useCallback, useRef } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
-import { Play, Save, FileText, Plus, ChevronDown, AlertTriangle, CheckCircle2, Archive, DownloadCloud } from 'lucide-react'
-import { runBinPacking } from '../utils/binPacking'
+import { Play, Save, FileText, Plus, ChevronDown, AlertTriangle, CheckCircle2, Archive, DownloadCloud, Move, RotateCcw, Check } from 'lucide-react'
+import { runBinPacking, generateCallSheet } from '../utils/binPacking'
 import { generateLoadPlanPDF } from '../utils/pdfReport'
 import TruckViewer3D from '../components/TruckViewer3D'
 
@@ -18,6 +18,13 @@ export default function LoadPlanner() {
   const [saving, setSaving] = useState(false)
   const [running, setRunning] = useState(false)
   const [currentPlanId, setCurrentPlanId] = useState(null)
+
+  // Edit mode (drag-to-reposition) state
+  const [editMode, setEditMode] = useState(false)
+  const [undoStack, setUndoStack] = useState([])  // array of packed snapshots
+  const [algoResult, setAlgoResult] = useState(null) // original algorithm output, never mutated
+  const [hasManualOverrides, setHasManualOverrides] = useState(false)
+  const undoStackRef = useRef([])
   const [repackModal, setRepackModal] = useState(false)
   const [repackName, setRepackName] = useState('')
   const [repackSaving, setRepackSaving] = useState(false)
@@ -95,14 +102,105 @@ export default function LoadPlanner() {
   const runPacking = async () => {
     if (!selectedTruck || cases.length === 0) return
     setRunning(true)
-    // Run in next tick so UI updates
     await new Promise(r => setTimeout(r, 50))
     try {
-      const r = runBinPacking(cases, selectedTruck)
+      // Load user-defined stack preferences to bias the algorithm
+      let stackPrefs = []
+      if (window.electronAPI?.stackPrefs) {
+        try { stackPrefs = await window.electronAPI.stackPrefs.getAll() } catch(e) {}
+      }
+      const r = runBinPacking(cases, selectedTruck, stackPrefs)
       setResult(r)
+      setAlgoResult(r)
+      setUndoStack([])
+      undoStackRef.current = []
+      setHasManualOverrides(false)
+      setEditMode(false)
     } finally {
       setRunning(false)
     }
+  }
+
+  // ── Edit mode: box moved handler ─────────────────────────────────────────
+  const handleBoxMoved = useCallback((movedBox) => {
+    setResult(prev => {
+      if (!prev) return prev
+      // Push current state to undo stack (cap at 50)
+      const snapshot = prev.packed.map(b => ({ ...b }))
+      const newStack = [...undoStackRef.current, snapshot].slice(-50)
+      undoStackRef.current = newStack
+      setUndoStack(newStack)
+      setHasManualOverrides(true)
+
+      // Update position
+      const newPacked = prev.packed.map(b =>
+        (b.id === movedBox.id && b.unitIndex === movedBox.unitIndex)
+          ? { ...b, x: movedBox.x, y: movedBox.y, z: movedBox.z }
+          : b
+      )
+
+      // Recalculate loadOrder: sort by x ascending (cab=low → door=high = loaded last = first off)
+      const sorted = [...newPacked].sort((a, b) => {
+        if (Math.abs(a.x - b.x) > 1) return b.x - a.x // deepest (cab-end, low x) = lowest order
+        if (Math.abs(a.z - b.z) > 1) return a.z - b.z // floor first
+        return a.y - b.y
+      })
+      sorted.forEach((b, i) => { b.loadOrder = i + 1 })
+
+      // Save stack pref: if the moved box is now on top of another box, record the pair
+      if (movedBox.z > 0.5 && window.electronAPI?.stackPrefs) {
+        const others = newPacked.filter(b =>
+          !(b.id === movedBox.id && b.unitIndex === movedBox.unitIndex)
+        )
+        const below = others.filter(b =>
+          Math.abs((b.z + b.h) - movedBox.z) < 1 &&
+          movedBox.x < b.x + b.l - 0.5 && movedBox.x + movedBox.l > b.x + 0.5 &&
+          movedBox.y < b.y + b.w - 0.5 && movedBox.y + movedBox.w > b.y + 0.5
+        )
+        for (const b of below) {
+          window.electronAPI.stackPrefs.save({
+            bottom_case_id: b.id,
+            top_case_id: movedBox.id,
+            bottom_name: b.name,
+            top_name: movedBox.name,
+          }).catch(() => {})
+        }
+      }
+
+      const newCallSheet = generateCallSheet(sorted, selectedTruck)
+      return { ...prev, packed: sorted, callSheet: newCallSheet }
+    })
+  }, [selectedTruck])
+
+  // ── Ctrl+Z undo (global, only active in edit mode) ───────────────────────
+  useEffect(() => {
+    const handleKeyDown = (e) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === 'z' && editMode) {
+        e.preventDefault()
+        const stack = undoStackRef.current
+        if (stack.length === 0) return
+        const prev = stack[stack.length - 1]
+        const newStack = stack.slice(0, -1)
+        undoStackRef.current = newStack
+        setUndoStack(newStack)
+        setResult(r => {
+          if (!r) return r
+          const newCallSheet = generateCallSheet(prev, selectedTruck)
+          return { ...r, packed: prev, callSheet: newCallSheet }
+        })
+        if (newStack.length === 0) setHasManualOverrides(false)
+      }
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [editMode, selectedTruck])
+
+  const resetToAlgo = () => {
+    if (!algoResult) return
+    setResult(algoResult)
+    setUndoStack([])
+    undoStackRef.current = []
+    setHasManualOverrides(false)
   }
 
   const savePlan = async () => {
@@ -366,9 +464,74 @@ export default function LoadPlanner() {
       </div>
 
       {/* 3D View */}
-      <div className="flex-1 overflow-hidden">
+      <div className="flex-1 overflow-hidden flex flex-col">
+        {result && (
+          <div className="flex items-center gap-2 px-3 py-1.5 bg-dark-800 border-b border-dark-600 text-xs">
+            <button
+              onClick={() => setEditMode(m => !m)}
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium border transition-colors ${
+                editMode
+                  ? 'bg-yellow-500/20 border-yellow-500/60 text-yellow-400 hover:bg-yellow-500/30'
+                  : 'border-dark-500 text-gray-400 hover:text-gray-200 hover:bg-dark-600'
+              }`}
+            >
+              <Move size={12} /> {editMode ? 'Exit Edit Mode' : 'Edit Layout'}
+            </button>
+            {editMode && (
+              <>
+                <span className="text-gray-600">|</span>
+                <button
+                  onClick={() => {
+                    const stack = undoStackRef.current
+                    if (stack.length === 0) return
+                    const prev = stack[stack.length - 1]
+                    const newStack = stack.slice(0, -1)
+                    undoStackRef.current = newStack
+                    setUndoStack(newStack)
+                    setResult(r => {
+                      if (!r) return r
+                      const newCallSheet = generateCallSheet(prev, selectedTruck)
+                      return { ...r, packed: prev, callSheet: newCallSheet }
+                    })
+                    if (newStack.length === 0) setHasManualOverrides(false)
+                  }}
+                  disabled={undoStack.length === 0}
+                  className="flex items-center gap-1 px-2 py-1 rounded text-xs text-gray-400 hover:text-gray-200 hover:bg-dark-600 disabled:opacity-30 disabled:cursor-not-allowed"
+                >
+                  <RotateCcw size={11} /> Undo
+                </button>
+                {hasManualOverrides && (
+                  <>
+                    <button
+                      onClick={() => { setEditMode(false) }}
+                      className="flex items-center gap-1 px-2 py-1 rounded text-xs bg-green-500/20 border border-green-500/40 text-green-400 hover:bg-green-500/30"
+                    >
+                      <Check size={11} /> Apply Changes
+                    </button>
+                    <button
+                      onClick={resetToAlgo}
+                      className="flex items-center gap-1 px-2 py-1 rounded text-xs text-gray-500 hover:text-red-400 hover:bg-dark-600"
+                    >
+                      Reset to Algorithm
+                    </button>
+                  </>
+                )}
+              </>
+            )}
+            {hasManualOverrides && !editMode && (
+              <span className="text-yellow-500/80 text-xs">✏ Manual overrides active</span>
+            )}
+          </div>
+        )}
         {result ? (
-          <TruckViewer3D truck={selectedTruck} packed={result.packed} />
+          <div className="flex-1 overflow-hidden">
+            <TruckViewer3D
+              truck={selectedTruck}
+              packed={result.packed}
+              editMode={editMode}
+              onBoxMoved={handleBoxMoved}
+            />
+          </div>
         ) : (
           <div className="flex flex-col items-center justify-center h-full text-gray-600 gap-3 px-6">
             <div className="text-6xl opacity-20">🚛</div>

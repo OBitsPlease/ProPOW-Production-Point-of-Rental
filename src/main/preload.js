@@ -114,4 +114,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
     onUrlReady: (cb) => ipcRenderer.on('tunnel:urlReady', (_, url) => cb(url)),
     removeListeners: () => ipcRenderer.removeAllListeners('tunnel:urlReady'),
   },
+  stackPrefs: {
+    getAll: () => ipcRenderer.invoke('stackPrefs:getAll'),
+    save: (pref) => ipcRenderer.invoke('stackPrefs:save', pref),
+    delete: (id) => ipcRenderer.invoke('stackPrefs:delete', id),
+  },
 })

@@ -53,6 +53,11 @@ function setupDatabase() {
     try { data = JSON.parse(fs.readFileSync(dbPath, 'utf8')) } catch(e) { data = null }
   }
 
+  // Migrate: add missing tables introduced in newer versions
+  if (data) {
+    if (!data.stack_prefs) { data.stack_prefs = []; save() }
+  }
+
   if (!data) {
     data = {
       trucks: [
@@ -79,6 +84,7 @@ function setupDatabase() {
       case_repacks: [],
       address_book: [],
       repairs: [],
+      stack_prefs: [],
       settings: {},
     }
     save()
