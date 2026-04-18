@@ -2,9 +2,14 @@ const { app, BrowserWindow, protocol, ipcMain, dialog, shell, screen } = require
 const path = require('path')
 const fs = require('fs')
 const http = require('http')
+const { spawn } = require('child_process')
 const { autoUpdater } = require('electron-updater')
 const { setupDatabase } = require('./db')
 const { registerIpcHandlers } = require('./ipc-handlers')
+const { startHttpServer, PORT: HTTP_PORT } = require('./http-server')
+
+let cloudflaredProcess = null
+let httpServer = null
 
 let mainWindow
 
@@ -96,6 +101,117 @@ async function createWindow() {
   return isDev
 }
 
+// ── Cloudflare Tunnel ─────────────────────────────────────────────────────────
+function findCloudflared() {
+  // 1. Prefer bundled binary (packaged inside the .app / installer)
+  const arch = process.arch === 'arm64' ? 'arm64' : 'amd64'
+  const ext  = process.platform === 'win32' ? '.exe' : ''
+  const platform = process.platform === 'win32' ? 'windows' : 'darwin'
+  const bundledName = `cloudflared-${platform}-${arch}${ext}`
+
+  const bundledPath = app.isPackaged
+    ? path.join(process.resourcesPath, 'bin', bundledName)
+    : path.join(__dirname, '../../assets/bin', bundledName)
+
+  if (fs.existsSync(bundledPath)) {
+    // Ensure executable on mac/linux
+    if (process.platform !== 'win32') {
+      try { fs.chmodSync(bundledPath, 0o755) } catch (_) {}
+    }
+    return bundledPath
+  }
+
+  // 2. Fall back to system installs (Homebrew, PATH)
+  const candidates = [
+    '/opt/homebrew/bin/cloudflared',
+    '/usr/local/bin/cloudflared',
+    '/usr/bin/cloudflared',
+    'cloudflared',
+  ]
+  for (const c of candidates) {
+    try {
+      if (c.startsWith('/') && !fs.existsSync(c)) continue
+      return c
+    } catch (_) { continue }
+  }
+  return 'cloudflared'
+}
+
+function startCloudflaredTunnel() {
+  const bin = findCloudflared()
+  const urlFile = path.join(app.getPath('userData'), 'remote-access.txt')
+
+  console.log('[cloudflared] Starting tunnel on port', HTTP_PORT)
+
+  cloudflaredProcess = spawn(bin, ['tunnel', '--url', `http://localhost:${HTTP_PORT}`], {
+    stdio: ['ignore', 'pipe', 'pipe'],
+  })
+
+  let tunnelUrl = null
+  const urlRegex = /https:\/\/[a-z0-9-]+\.trycloudflare\.com/i
+
+  const onData = (data) => {
+    const text = data.toString()
+    const match = text.match(urlRegex)
+    if (match && !tunnelUrl) {
+      tunnelUrl = match[0]
+      console.log('[cloudflared] Tunnel URL:', tunnelUrl)
+
+      const content = [
+        'ProPOR+ Remote Access',
+        '======================',
+        '',
+        'Your app is accessible at:',
+        '',
+        '  ' + tunnelUrl,
+        '',
+        'Share this URL with anyone who needs access.',
+        'This URL changes each time the app is launched.',
+        '',
+        'Note: File attachments, Excel import/export, and PDF export',
+        'are only available on the master computer.',
+        '',
+        'Generated: ' + new Date().toLocaleString(),
+      ].join('\n')
+
+      fs.writeFileSync(urlFile, content, 'utf8')
+      shell.openPath(urlFile)
+    }
+  }
+
+  cloudflaredProcess.stdout.on('data', onData)
+  cloudflaredProcess.stderr.on('data', onData)
+
+  cloudflaredProcess.on('error', (err) => {
+    if (err.code === 'ENOENT') {
+      console.warn('[cloudflared] Not installed. Install with: brew install cloudflared')
+      const msg = [
+        'Remote Access Setup Required',
+        '=============================',
+        '',
+        'cloudflared is not installed on this computer.',
+        '',
+        'To enable remote access, install it with:',
+        '',
+        '  brew install cloudflared',
+        '',
+        '(Requires Homebrew — https://brew.sh)',
+        '',
+        'After installing, restart ProPOR+ to get your tunnel URL.',
+      ].join('\n')
+      fs.writeFileSync(urlFile, msg, 'utf8')
+      shell.openPath(urlFile)
+    } else {
+      console.error('[cloudflared] Error:', err.message)
+    }
+  })
+
+  cloudflaredProcess.on('exit', (code) => {
+    console.log('[cloudflared] Process exited with code', code)
+    cloudflaredProcess = null
+  })
+}
+
 app.whenReady().then(async () => {
   setupDatabase()
   registerIpcHandlers(ipcMain, dialog, shell, mainWindow)
@@ -120,6 +236,16 @@ app.whenReady().then(async () => {
   })
 
   const isDev = await createWindow()
+
+  // ── Start local HTTP server (serves dist/ + REST API for browser access) ────
+  const distDir = app.isPackaged
+    ? path.join(process.resourcesPath, 'app', 'dist')
+    : path.join(__dirname, '../../dist')
+  httpServer = startHttpServer(distDir)
+
+  // ── Start Cloudflare Quick Tunnel ────────────────────────────────────────────
+  // Give the HTTP server a moment to bind before connecting the tunnel
+  setTimeout(startCloudflaredTunnel, 1500)
 
   // Auto-updater setup — only in production builds; skip in dev
   if (!isDev) {
@@ -198,5 +324,16 @@ app.whenReady().then(async () => {
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit()
+})
+
+app.on('will-quit', () => {
+  if (cloudflaredProcess) {
+    cloudflaredProcess.kill()
+    cloudflaredProcess = null
+  }
+  if (httpServer) {
+    httpServer.close()
+    httpServer = null
+  }
 })
 

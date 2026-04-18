@@ -1,6 +1,6 @@
 {
   "name": "propor-plus",
-  "version": "2.1.14",
+  "version": "2.1.15",
   "description": "ProPOR+ - Production Point of Rental Plus Truck Loading",
   "main": "src/main/index.js",
   "scripts": {
@@ -25,7 +25,8 @@
       "assets/**/*"
     ],
     "extraResources": [
-      { "from": "assets/splash.png", "to": "splash.png" }
+      { "from": "assets/splash.png", "to": "splash.png" },
+      { "from": "assets/bin", "to": "bin" }
     ],
     "mac": {
       "category": "public.app-category.business",

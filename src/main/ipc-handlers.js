@@ -571,18 +571,22 @@ function registerIpcHandlers(ipcMain, dialog, shell, win) {
     const wb = XLSX.readFile(filePaths[0])
     // Support template with Items/Cases sheets, or fall back to first sheet as items
     const sheetNames = wb.SheetNames.map(n => n.trim().toLowerCase())
-    const itemsSheetIdx = sheetNames.findIndex(n => n === 'items' || n === 'item')
-    const casesSheetIdx = sheetNames.findIndex(n => n === 'cases' || n === 'case')
+    const itemsSheetIdx  = sheetNames.findIndex(n => n === 'items' || n === 'item')
+    const casesSheetIdx  = sheetNames.findIndex(n => n === 'cases' || n === 'case')
+    const groupsSheetIdx = sheetNames.findIndex(n => n === 'groups' || n === 'group')
+    const deptsSheetIdx  = sheetNames.findIndex(n => n === 'departments' || n === 'department' || n === 'depts')
 
     if (itemsSheetIdx !== -1 || casesSheetIdx !== -1) {
       // Multi-sheet template format
-      const itemRows = itemsSheetIdx !== -1 ? sheetToJsonSkipBlanks(wb.Sheets[wb.SheetNames[itemsSheetIdx]]) : []
-      const caseRows = casesSheetIdx !== -1 ? sheetToJsonSkipBlanks(wb.Sheets[wb.SheetNames[casesSheetIdx]]) : []
-      return { format: 'template', itemRows, caseRows }
+      const itemRows  = itemsSheetIdx  !== -1 ? sheetToJsonSkipBlanks(wb.Sheets[wb.SheetNames[itemsSheetIdx]])  : []
+      const caseRows  = casesSheetIdx  !== -1 ? sheetToJsonSkipBlanks(wb.Sheets[wb.SheetNames[casesSheetIdx]])  : []
+      const groupRows = groupsSheetIdx !== -1 ? sheetToJsonSkipBlanks(wb.Sheets[wb.SheetNames[groupsSheetIdx]]) : []
+      const deptRows  = deptsSheetIdx  !== -1 ? sheetToJsonSkipBlanks(wb.Sheets[wb.SheetNames[deptsSheetIdx]])  : []
+      return { format: 'template', itemRows, caseRows, groupRows, deptRows }
     } else {
       // Legacy: single sheet — treat all as items
       const ws = wb.Sheets[wb.SheetNames[0]]
-      return { format: 'legacy', itemRows: sheetToJsonSkipBlanks(ws), caseRows: [] }
+      return { format: 'legacy', itemRows: sheetToJsonSkipBlanks(ws), caseRows: [], groupRows: [], deptRows: [] }
     }
   })
 

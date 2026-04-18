@@ -307,15 +307,16 @@ export default function Items() {
   const startImport = async () => {
     const result = await api.importExcel()
     if (!result) return
-    const { itemRows = [], caseRows = [] } = result
+    const { itemRows = [], caseRows = [], groupRows = [], deptRows = [] } = result
     const itemCols = itemRows.length ? Object.keys(itemRows[0]) : []
     const caseCols = caseRows.length ? Object.keys(caseRows[0]) : []
+    const firstTab = groupRows.length > 0 ? 'groups' : (itemRows.length > 0 ? 'items' : 'cases')
     setImportModal({
-      itemRows, caseRows,
+      itemRows, caseRows, groupRows, deptRows,
       itemColumns: itemCols, caseColumns: caseCols,
       itemMapping: detectMapping(itemCols),
       caseMapping: detectCaseMapping(caseCols),
-      tab: itemRows.length > 0 ? 'items' : 'cases',
+      tab: firstTab,
     })
   }
   const downloadTemplate = async () => {
@@ -328,11 +329,71 @@ export default function Items() {
     }
   }
   const confirmImport = async () => {
-    const { itemRows, caseRows, itemMapping, caseMapping } = importModal
+    const { itemRows, caseRows, groupRows = [], deptRows = [], itemMapping, caseMapping } = importModal
     let skippedItems = 0
     let skippedCases = 0
 
-    // Build sets of existing serials/barcodes for fast lookup (ignore empty strings)
+    // ── 1. Import departments (create missing) ────────────────────────
+    let latestDepts = [...depts]
+    if (deptRows.length) {
+      for (const row of deptRows) {
+        const name = String(row.name || row.Name || '').trim()
+        if (!name) continue
+        const exists = latestDepts.find(d => d.name.toLowerCase() === name.toLowerCase())
+        if (!exists) {
+          const color = String(row.color || row.Color || '#4f8ef7').trim()
+          await api.saveDepartment({ name, color })
+        }
+      }
+      latestDepts = await api.getDepartments()
+    }
+
+    // ── 2. Import groups (3-level: create top → sub1 → sub2) ─────────
+    let latestGroups = [...groups]
+    if (groupRows.length) {
+      // Pass 1: top-level groups (no parent_name)
+      for (const row of groupRows) {
+        const name       = String(row.name        || row.Name        || '').trim()
+        const parentName = String(row.parent_name || row.Parent_Name || '').trim()
+        if (!name || parentName) continue
+        if (!latestGroups.find(g => g.name.toLowerCase() === name.toLowerCase() && !g.parent_id)) {
+          const color = String(row.color || row.Color || '#4f8ef7').trim()
+          await api.groups.save({ name, color })
+        }
+      }
+      latestGroups = await api.groups.getAll()
+
+      // Pass 2: sub1 groups (parent_name matches a top-level group)
+      for (const row of groupRows) {
+        const name       = String(row.name        || row.Name        || '').trim()
+        const parentName = String(row.parent_name || row.Parent_Name || '').trim()
+        if (!name || !parentName) continue
+        const parent = latestGroups.find(g => g.name.toLowerCase() === parentName.toLowerCase() && !g.parent_id)
+        if (!parent) continue
+        if (!latestGroups.find(g => g.name.toLowerCase() === name.toLowerCase() && g.parent_id === parent.id)) {
+          const color = String(row.color || row.Color || '#4f8ef7').trim()
+          await api.groups.save({ name, color, parent_id: parent.id })
+        }
+      }
+      latestGroups = await api.groups.getAll()
+
+      // Pass 3: sub2 groups (parent_name matches a sub1 group)
+      for (const row of groupRows) {
+        const name       = String(row.name        || row.Name        || '').trim()
+        const parentName = String(row.parent_name || row.Parent_Name || '').trim()
+        if (!name || !parentName) continue
+        // Only process rows whose parent is itself a child (sub1)
+        const parent = latestGroups.find(g => g.name.toLowerCase() === parentName.toLowerCase() && g.parent_id)
+        if (!parent) continue
+        if (!latestGroups.find(g => g.name.toLowerCase() === name.toLowerCase() && g.parent_id === parent.id)) {
+          const color = String(row.color || row.Color || '#4f8ef7').trim()
+          await api.groups.save({ name, color, parent_id: parent.id })
+        }
+      }
+      latestGroups = await api.groups.getAll()
+    }
+
+    // ── 3. Import items & cases with duplicate checking ───────────────
     const existingItemSerials  = new Set(items.map(i => i.serial).filter(Boolean))
     const existingItemBarcodes = new Set(items.map(i => i.barcode).filter(Boolean))
     const existingCaseSerials  = new Set(cases.map(c => c.serial).filter(Boolean))
@@ -348,8 +409,10 @@ export default function Items() {
           skippedItems++
           continue
         }
-        const dept = depts.find(d => d.name.toLowerCase() === (item.department || '').toLowerCase())
-        await api.saveItem({ ...item, department_id: dept ? dept.id : null })
+        const dept = latestDepts.find(d => d.name.toLowerCase() === (item.department || '').toLowerCase())
+        // Resolve group by name — search all levels
+        const grp = latestGroups.find(g => g.name.toLowerCase() === (item.group || '').toLowerCase())
+        await api.saveItem({ ...item, department_id: dept ? dept.id : null, group_id: grp ? grp.id : null })
       }
     }
     if (caseRows.length) {
@@ -362,7 +425,7 @@ export default function Items() {
           skippedCases++
           continue
         }
-        const grp = groups.find(g => g.name.toLowerCase() === (c.group || '').toLowerCase())
+        const grp = latestGroups.find(g => g.name.toLowerCase() === (c.group || '').toLowerCase())
         await api.cases.save({ ...c, group_id: grp ? grp.id : null })
       }
     }
@@ -428,6 +491,7 @@ export default function Items() {
       }
     }
     dragging.current = null
+    setSelected(new Set())
     loadAll()
   }
 
@@ -474,6 +538,7 @@ export default function Items() {
       setDropQtyModal({ targetCase: updatedCase, pendingItems, index: index + 1, qty: 1 })
     } else {
       setDropQtyModal(null)
+      setSelected(new Set())
       loadAll()
     }
   }
@@ -1355,16 +1420,39 @@ export default function Items() {
 
       {/* ── Import Modal ─────────────────────────────────────────────── */}
       {importModal && (() => {
-        const isItems = importModal.tab === 'items'
-        const totalItems = importModal.itemRows.length
-        const totalCases = importModal.caseRows.length
+        const isItems  = importModal.tab === 'items'
+        const isGroups = importModal.tab === 'groups'
+        const totalItems  = importModal.itemRows.length
+        const totalCases  = importModal.caseRows.length
+        const totalGroups = (importModal.groupRows || []).length
+        const totalDepts  = (importModal.deptRows  || []).length
+        const existingGroupNames = new Set(groups.map(g => g.name.toLowerCase()))
+        const existingDeptNames  = new Set(depts.map(d => d.name.toLowerCase()))
+        const newGroups = (importModal.groupRows || []).filter(r => {
+          const n = String(r.name || r.Name || '').trim().toLowerCase()
+          return n && !existingGroupNames.has(n)
+        })
+        const newDepts = (importModal.deptRows || []).filter(r => {
+          const n = String(r.name || r.Name || '').trim().toLowerCase()
+          return n && !existingDeptNames.has(n)
+        })
         return (
           <Modal
-            title={`Import — ${totalItems} item${totalItems !== 1 ? 's' : ''}, ${totalCases} case${totalCases !== 1 ? 's' : ''}`}
+            title={`Import — ${totalItems} item${totalItems !== 1 ? 's' : ''}, ${totalCases} case${totalCases !== 1 ? 's' : ''}${totalGroups > 0 ? `, ${totalGroups} groups` : ''}`}
             onClose={() => setImportModal(null)}
           >
             {/* Tab bar */}
             <div className="flex border-b border-dark-500 px-5 pt-3 gap-1">
+              {totalGroups > 0 && (
+                <button
+                  onClick={() => setImportModal(m => ({ ...m, tab: 'groups' }))}
+                  className={`px-4 py-1.5 text-sm rounded-t font-medium transition-colors ${
+                    isGroups ? 'bg-dark-600 text-white border border-b-transparent border-dark-500' : 'text-white/50 hover:text-white'
+                  }`}
+                >
+                  Groups ({totalGroups})
+                </button>
+              )}
               {totalItems > 0 && (
                 <button
                   onClick={() => setImportModal(m => ({ ...m, tab: 'items' }))}
@@ -1379,7 +1467,7 @@ export default function Items() {
                 <button
                   onClick={() => setImportModal(m => ({ ...m, tab: 'cases' }))}
                   className={`px-4 py-1.5 text-sm rounded-t font-medium transition-colors ${
-                    !isItems ? 'bg-dark-600 text-white border border-b-transparent border-dark-500' : 'text-white/50 hover:text-white'
+                    !isItems && !isGroups ? 'bg-dark-600 text-white border border-b-transparent border-dark-500' : 'text-white/50 hover:text-white'
                   }`}
                 >
                   Cases ({totalCases})
@@ -1387,42 +1475,96 @@ export default function Items() {
               )}
             </div>
             <div className="p-5 space-y-3">
-              <p className="text-gray-400 text-sm">Map spreadsheet columns to fields. Auto-detected where possible.</p>
-              {isItems ? (
-                <div className="grid grid-cols-2 gap-3">
-                  {Object.entries({
-                    name: 'Item Name *', sku: 'SKU / Code', barcode: 'Barcode', serial: 'Serial #',
-                    department: 'Department', length: 'Length', width: 'Width', height: 'Height',
-                    weight: 'Weight', quantity: 'Quantity',
-                    max_stack_qty: 'Max Stack Qty', max_stack_weight: 'Max Stack Weight',
-                  }).map(([field, label]) => (
-                    <div key={field}>
-                      <label className="label">{label}</label>
-                      <select className="input-field" value={importModal.itemMapping[field] || ''}
-                        onChange={e => setImportModal(m => ({ ...m, itemMapping: { ...m.itemMapping, [field]: e.target.value || undefined } }))}>
-                        <option value="">— skip —</option>
-                        {importModal.itemColumns.map(c => <option key={c} value={c}>{c}</option>)}
-                      </select>
+              {isGroups ? (
+                <div className="space-y-3">
+                  <p className="text-gray-400 text-sm">These groups and departments will be created automatically before importing items and cases.</p>
+                  {totalDepts > 0 && (
+                    <div>
+                      <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1.5">Departments ({totalDepts})</p>
+                      <div className="space-y-1 max-h-32 overflow-y-auto">
+                        {(importModal.deptRows || []).map((row, i) => {
+                          const name = String(row.name || row.Name || '').trim()
+                          const color = String(row.color || row.Color || '#4f8ef7').trim()
+                          const isNew = !existingDeptNames.has(name.toLowerCase())
+                          return (
+                            <div key={i} className="flex items-center gap-2 text-sm px-2 py-1 rounded-lg bg-dark-800">
+                              <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ background: color }} />
+                              <span className={isNew ? 'text-white' : 'text-white/40'}>{name}</span>
+                              {!isNew && <span className="text-xs text-white/30 ml-auto">already exists</span>}
+                              {isNew && <span className="text-xs text-green-400/70 ml-auto">new</span>}
+                            </div>
+                          )
+                        })}
+                      </div>
                     </div>
-                  ))}
+                  )}
+                  {totalGroups > 0 && (
+                    <div>
+                      <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1.5">Groups ({totalGroups})</p>
+                      <div className="space-y-1 max-h-48 overflow-y-auto">
+                        {(importModal.groupRows || []).map((row, i) => {
+                          const name       = String(row.name        || row.Name        || '').trim()
+                          const parentName = String(row.parent_name || row.Parent_Name || '').trim()
+                          const color      = String(row.color       || row.Color       || '#4f8ef7').trim()
+                          const isNew = !existingGroupNames.has(name.toLowerCase())
+                          const indent = parentName ? 'ml-5' : ''
+                          return (
+                            <div key={i} className={`flex items-center gap-2 text-sm px-2 py-1 rounded-lg bg-dark-800 ${indent}`}>
+                              <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ background: color }} />
+                              <span className={isNew ? 'text-white' : 'text-white/40'}>{name}</span>
+                              {parentName && <span className="text-xs text-white/30">in {parentName}</span>}
+                              {!isNew && <span className="text-xs text-white/30 ml-auto">already exists</span>}
+                              {isNew && <span className="text-xs text-green-400/70 ml-auto">new</span>}
+                            </div>
+                          )
+                        })}
+                      </div>
+                    </div>
+                  )}
+                  {newGroups.length === 0 && newDepts.length === 0 && (
+                    <p className="text-sm text-white/40 text-center py-4">All groups and departments already exist — no new ones will be created.</p>
+                  )}
                 </div>
               ) : (
-                <div className="grid grid-cols-2 gap-3">
-                  {Object.entries({
-                    name: 'Case Name *', sku: 'SKU / Code', barcode: 'Barcode', serial: 'Serial #',
-                    group: 'Group', color: 'Color (hex)', length: 'Length', width: 'Width',
-                    height: 'Height', weight: 'Weight',
-                  }).map(([field, label]) => (
-                    <div key={field}>
-                      <label className="label">{label}</label>
-                      <select className="input-field" value={importModal.caseMapping[field] || ''}
-                        onChange={e => setImportModal(m => ({ ...m, caseMapping: { ...m.caseMapping, [field]: e.target.value || undefined } }))}>
-                        <option value="">— skip —</option>
-                        {importModal.caseColumns.map(c => <option key={c} value={c}>{c}</option>)}
-                      </select>
+                <>
+                  <p className="text-gray-400 text-sm">Map spreadsheet columns to fields. Auto-detected where possible.</p>
+                  {isItems ? (
+                    <div className="grid grid-cols-2 gap-3">
+                      {Object.entries({
+                        name: 'Item Name *', sku: 'SKU / Code', barcode: 'Barcode', serial: 'Serial #',
+                        department: 'Department', length: 'Length', width: 'Width', height: 'Height',
+                        weight: 'Weight', quantity: 'Quantity',
+                        max_stack_qty: 'Max Stack Qty', max_stack_weight: 'Max Stack Weight',
+                      }).map(([field, label]) => (
+                        <div key={field}>
+                          <label className="label">{label}</label>
+                          <select className="input-field" value={importModal.itemMapping[field] || ''}
+                            onChange={e => setImportModal(m => ({ ...m, itemMapping: { ...m.itemMapping, [field]: e.target.value || undefined } }))}>
+                            <option value="">— skip —</option>
+                            {importModal.itemColumns.map(c => <option key={c} value={c}>{c}</option>)}
+                          </select>
+                        </div>
+                      ))}
                     </div>
-                  ))}
-                </div>
+                  ) : (
+                    <div className="grid grid-cols-2 gap-3">
+                      {Object.entries({
+                        name: 'Case Name *', sku: 'SKU / Code', barcode: 'Barcode', serial: 'Serial #',
+                        group: 'Group', color: 'Color (hex)', length: 'Length', width: 'Width',
+                        height: 'Height', weight: 'Weight',
+                      }).map(([field, label]) => (
+                        <div key={field}>
+                          <label className="label">{label}</label>
+                          <select className="input-field" value={importModal.caseMapping[field] || ''}
+                            onChange={e => setImportModal(m => ({ ...m, caseMapping: { ...m.caseMapping, [field]: e.target.value || undefined } }))}>
+                            <option value="">— skip —</option>
+                            {importModal.caseColumns.map(c => <option key={c} value={c}>{c}</option>)}
+                          </select>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </>
               )}
             </div>
             <ModalFooter onCancel={() => setImportModal(null)} onSave={confirmImport}
