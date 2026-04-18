@@ -10,6 +10,7 @@ const { startHttpServer, PORT: HTTP_PORT } = require('./http-server')
 
 let cloudflaredProcess = null
 let httpServer = null
+let currentTunnelUrl = null
 
 let mainWindow
 
@@ -103,24 +104,36 @@ async function createWindow() {
 
 // ── Cloudflare Tunnel ─────────────────────────────────────────────────────────
 function findCloudflared() {
-  // 1. Prefer bundled binary shipped with the app
+  // 1. Prefer bundled binary shipped with the app.
+  //    On Windows the installer extracts to Program Files which may be read-only,
+  //    so we copy the binary to userData on first use so it can always be executed.
   const arch = process.arch === 'arm64' ? 'arm64' : 'amd64'
   const ext  = process.platform === 'win32' ? '.exe' : ''
   const platform = process.platform === 'win32' ? 'windows' : 'darwin'
   const bundledName = `cloudflared-${platform}-${arch}${ext}`
 
-  const bundledPath = app.isPackaged
+  const sourcePath = app.isPackaged
     ? path.join(process.resourcesPath, 'bin', bundledName)
     : path.join(__dirname, '../../assets/bin', bundledName)
 
-  if (fs.existsSync(bundledPath)) {
-    if (process.platform !== 'win32') {
-      // Ensure executable bit is set
-      try { fs.chmodSync(bundledPath, 0o755) } catch (_) {}
-      // Remove macOS Gatekeeper quarantine flag (set on downloaded files)
-      try { require('child_process').execFileSync('xattr', ['-d', 'com.apple.quarantine', bundledPath], { stdio: 'ignore' }) } catch (_) {}
+  if (fs.existsSync(sourcePath)) {
+    // On Windows: copy to userData so the binary is always writable/executable
+    if (process.platform === 'win32') {
+      try {
+        const destDir = path.join(app.getPath('userData'), 'bin')
+        if (!fs.existsSync(destDir)) fs.mkdirSync(destDir, { recursive: true })
+        const destPath = path.join(destDir, bundledName)
+        if (!fs.existsSync(destPath)) fs.copyFileSync(sourcePath, destPath)
+        return destPath
+      } catch (e) {
+        console.warn('[cloudflared] Could not copy binary to userData:', e.message)
+        return sourcePath
+      }
     }
-    return bundledPath
+    // macOS/Linux: ensure executable, strip quarantine
+    try { fs.chmodSync(sourcePath, 0o755) } catch (_) {}
+    try { require('child_process').execFileSync('xattr', ['-d', 'com.apple.quarantine', sourcePath], { stdio: 'ignore' }) } catch (_) {}
+    return sourcePath
   }
 
   // 2. System installs (Homebrew / PATH)
@@ -145,6 +158,7 @@ function spawnTunnel(bin, urlFile) {
     const match = text.match(urlRegex)
     if (match && !tunnelUrl) {
       tunnelUrl = match[0]
+      currentTunnelUrl = tunnelUrl
       console.log('[cloudflared] Tunnel URL:', tunnelUrl)
       const content = [
         'ProPOR+ Remote Access',
@@ -164,6 +178,10 @@ function spawnTunnel(bin, urlFile) {
       ].join('\n')
       fs.writeFileSync(urlFile, content, 'utf8')
       shell.openPath(urlFile)
+      // Notify renderer (Settings page) so it can display the URL live
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('tunnel:urlReady', tunnelUrl)
+      }
     }
   }
 
@@ -232,6 +250,9 @@ app.whenReady().then(async () => {
 
   // Sync handler: renderer can request the app version
   ipcMain.on('app:getVersion', (e) => { e.returnValue = app.getVersion() })
+
+  // Tunnel URL — renderer can poll for the current URL
+  ipcMain.handle('tunnel:getUrl', () => currentTunnelUrl || null)
 
   // ── Custom app:// protocol — serves splash.png without any file:// URL ─────
   const splashImgPath = app.isPackaged

@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Settings as SettingsIcon, Save, Trash2, AlertTriangle, RefreshCw, Download, CheckCircle } from 'lucide-react'
+import { Settings as SettingsIcon, Save, Trash2, AlertTriangle, RefreshCw, Download, CheckCircle, Wifi, Copy, Check } from 'lucide-react'
 
 function useLocalStorage(key, defaultValue) {
   const [value, setValue] = useState(() => {
@@ -77,6 +77,27 @@ export default function Settings() {
 
   // Clear All Data
   const [confirmClear, setConfirmClear] = useState(false)
+
+  // Remote Access (Cloudflare tunnel)
+  const [tunnelUrl, setTunnelUrl] = useState(null)
+  const [tunnelCopied, setTunnelCopied] = useState(false)
+
+  useEffect(() => {
+    const api = window.electronAPI
+    if (!api?.tunnel) return
+    // Fetch URL if tunnel is already running
+    api.tunnel.getUrl().then(url => { if (url) setTunnelUrl(url) })
+    // Listen for URL when tunnel connects
+    api.tunnel.onUrlReady((url) => setTunnelUrl(url))
+    return () => api.tunnel.removeListeners()
+  }, [])
+
+  const copyTunnelUrl = () => {
+    if (!tunnelUrl) return
+    navigator.clipboard.writeText(tunnelUrl)
+    setTunnelCopied(true)
+    setTimeout(() => setTunnelCopied(false), 2000)
+  }
 
   useEffect(() => {
     const loadDepts = async () => {
@@ -386,6 +407,42 @@ export default function Settings() {
                 Yes, Delete Everything
               </button>
             </div>
+          </div>
+        )}
+      </SectionCard>
+
+      {/* Remote Access */}
+      <SectionCard title="Remote Access">
+        <div className="flex items-start gap-3 mb-4">
+          <Wifi size={16} className="text-blue-400 shrink-0 mt-0.5" />
+          <div className="text-xs text-gray-400 leading-relaxed">
+            When this computer is the host, a Cloudflare tunnel URL is generated on launch so remote users can view and edit the app from any browser. Share the URL below.
+          </div>
+        </div>
+        {tunnelUrl ? (
+          <div className="bg-gray-800 border border-gray-700 rounded-lg p-3">
+            <div className="flex items-center gap-2">
+              <div className="flex-1 min-w-0">
+                <div className="text-xs text-gray-500 mb-1">Active tunnel URL</div>
+                <div className="text-sm font-mono text-blue-300 break-all">{tunnelUrl}</div>
+              </div>
+              <button
+                onClick={copyTunnelUrl}
+                className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg transition-colors shrink-0 ${
+                  tunnelCopied
+                    ? 'bg-green-700 text-green-100'
+                    : 'bg-blue-600 hover:bg-blue-700 text-white'
+                }`}
+              >
+                {tunnelCopied ? <Check size={12} /> : <Copy size={12} />}
+                {tunnelCopied ? 'Copied!' : 'Copy'}
+              </button>
+            </div>
+          </div>
+        ) : (
+          <div className="flex items-center gap-2 text-xs text-gray-500">
+            <RefreshCw size={12} className="animate-spin" />
+            Waiting for tunnel to connect…
           </div>
         )}
       </SectionCard>

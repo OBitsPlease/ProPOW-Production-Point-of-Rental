@@ -109,4 +109,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.removeAllListeners('updater:error')
     },
   },
+  tunnel: {
+    getUrl: () => ipcRenderer.invoke('tunnel:getUrl'),
+    onUrlReady: (cb) => ipcRenderer.on('tunnel:urlReady', (_, url) => cb(url)),
+    removeListeners: () => ipcRenderer.removeAllListeners('tunnel:urlReady'),
+  },
 })
