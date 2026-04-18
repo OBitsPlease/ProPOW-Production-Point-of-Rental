@@ -30,6 +30,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Excel Import
   importExcel: () => ipcRenderer.invoke('import:excel'),
   exportTemplate: () => ipcRenderer.invoke('export:template'),
+  exportLibrary: () => ipcRenderer.invoke('export:library'),
 
   // PDF Export
   exportPDF: (planId) => ipcRenderer.invoke('export:pdf', planId),

@@ -586,6 +586,95 @@ function registerIpcHandlers(ipcMain, dialog, shell, win) {
     }
   })
 
+  ipcMain.handle('export:library', async () => {
+    const db = getDb()
+    const items = db.data.items || []
+    const cases = db.data.cases || []
+    const groups = db.data.groups || []
+    const depts = db.data.departments || []
+
+    const { canceled, filePath } = await dialog.showSaveDialog({
+      title: 'Export Items Library',
+      defaultPath: 'propor-library-export.xlsx',
+      filters: [{ name: 'Excel Workbook', extensions: ['xlsx'] }],
+    })
+    if (canceled || !filePath) return null
+
+    const XLSX = require('xlsx')
+    const wb = XLSX.utils.book_new()
+
+    // ── Items sheet ────────────────────────────────────────────────────
+    const itemHeader = ['name', 'sku', 'barcode', 'serial', 'department', 'group',
+      'length', 'width', 'height', 'weight', 'quantity',
+      'can_rotate_lr', 'can_tip_side', 'can_flip',
+      'can_stack_on_others', 'allow_stacking_on_top', 'max_stack_qty', 'max_stack_weight', 'notes']
+    const itemRows = items.map(it => {
+      const dept = depts.find(d => d.id === it.department_id)
+      const grp  = groups.find(g => g.id === it.group_id)
+      return [
+        it.name || '', it.sku || '', it.barcode || '', it.serial || '',
+        dept ? dept.name : '', grp ? grp.name : '',
+        it.length ?? 12, it.width ?? 12, it.height ?? 12, it.weight ?? 0, it.quantity ?? 1,
+        it.can_rotate_lr ?? 1, it.can_tip_side ?? 1, it.can_flip ?? 1,
+        it.can_stack_on_others ?? 1, it.allow_stacking_on_top ?? 1,
+        it.max_stack_qty ?? 0, it.max_stack_weight ?? 0, it.notes || '',
+      ]
+    })
+    const wsItems = XLSX.utils.aoa_to_sheet([itemHeader, ...itemRows])
+    wsItems['!cols'] = [
+      { wch: 24 }, { wch: 12 }, { wch: 14 }, { wch: 14 }, { wch: 16 }, { wch: 16 },
+      { wch: 8 }, { wch: 8 }, { wch: 8 }, { wch: 8 }, { wch: 8 },
+      { wch: 13 }, { wch: 12 }, { wch: 9 }, { wch: 18 }, { wch: 20 },
+      { wch: 14 }, { wch: 16 }, { wch: 28 },
+    ]
+    XLSX.utils.book_append_sheet(wb, wsItems, 'Items')
+
+    // ── Cases sheet ────────────────────────────────────────────────────
+    const caseHeader = ['name', 'sku', 'barcode', 'serial', 'group', 'color',
+      'length', 'width', 'height', 'weight',
+      'can_rotate_lr', 'can_tip_side', 'can_flip',
+      'can_stack_on_others', 'allow_stacking_on_top', 'max_stack_weight', 'max_stack_qty', 'notes']
+    const caseRows = cases.map(cs => {
+      const grp = groups.find(g => g.id === cs.group_id)
+      return [
+        cs.name || '', cs.sku || '', cs.barcode || '', cs.serial || '',
+        grp ? grp.name : '', cs.color || '#f59e0b',
+        cs.length ?? 24, cs.width ?? 24, cs.height ?? 24, cs.weight ?? 0,
+        cs.can_rotate_lr ?? 1, cs.can_tip_side ?? 1, cs.can_flip ?? 1,
+        cs.can_stack_on_others ?? 1, cs.allow_stacking_on_top ?? 1,
+        cs.max_stack_weight ?? 0, cs.max_stack_qty ?? 0, cs.notes || '',
+      ]
+    })
+    const wsCases = XLSX.utils.aoa_to_sheet([caseHeader, ...caseRows])
+    wsCases['!cols'] = [
+      { wch: 24 }, { wch: 12 }, { wch: 14 }, { wch: 14 }, { wch: 16 }, { wch: 10 },
+      { wch: 8 }, { wch: 8 }, { wch: 8 }, { wch: 8 },
+      { wch: 13 }, { wch: 12 }, { wch: 9 }, { wch: 18 }, { wch: 20 },
+      { wch: 16 }, { wch: 14 }, { wch: 28 },
+    ]
+    XLSX.utils.book_append_sheet(wb, wsCases, 'Cases')
+
+    // ── Departments sheet ──────────────────────────────────────────────
+    const deptHeader = ['name', 'color']
+    const deptRows = depts.map(d => [d.name || '', d.color || ''])
+    const wsDepts = XLSX.utils.aoa_to_sheet([deptHeader, ...deptRows])
+    wsDepts['!cols'] = [{ wch: 24 }, { wch: 12 }]
+    XLSX.utils.book_append_sheet(wb, wsDepts, 'Departments')
+
+    // ── Groups sheet ───────────────────────────────────────────────────
+    const groupHeader = ['name', 'color', 'parent_name']
+    const groupRows = groups.map(g => {
+      const parent = g.parent_id ? groups.find(p => p.id === g.parent_id) : null
+      return [g.name || '', g.color || '', parent ? parent.name : '']
+    })
+    const wsGroups = XLSX.utils.aoa_to_sheet([groupHeader, ...groupRows])
+    wsGroups['!cols'] = [{ wch: 24 }, { wch: 12 }, { wch: 24 }]
+    XLSX.utils.book_append_sheet(wb, wsGroups, 'Groups')
+
+    XLSX.writeFile(wb, filePath)
+    return filePath
+  })
+
   ipcMain.handle('export:template', async () => {
     const { canceled, filePath } = await dialog.showSaveDialog({
       title: 'Save Import Template',

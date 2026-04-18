@@ -321,6 +321,12 @@ export default function Items() {
   const downloadTemplate = async () => {
     await api.exportTemplate()
   }
+  const exportLibrary = async () => {
+    const saved = await api.exportLibrary()
+    if (saved) {
+      // brief success — no-op; the save dialog confirms it
+    }
+  }
   const confirmImport = async () => {
     const { itemRows, caseRows, itemMapping, caseMapping } = importModal
     if (itemRows.length) {
@@ -470,6 +476,7 @@ export default function Items() {
         <div className="flex items-center gap-2 flex-wrap justify-end">
           <button onClick={downloadTemplate} className="btn-secondary"><Download size={14} /> Template</button>
           <button onClick={startImport} className="btn-secondary"><Upload size={14} /> Import Excel</button>
+          <button onClick={exportLibrary} className="btn-secondary"><Download size={14} /> Export Library</button>
           {items.length > 0 && <button onClick={() => setConfirmClearModal(true)} className="btn-danger"><Trash size={14} /> Clear All</button>}
           <button onClick={() => openNewGroup(null)} className="btn-secondary"><FolderPlus size={14} /> Create Group</button>
           <button onClick={openNewCase} className="btn-secondary"><Layers size={14} /> Create Case</button>
