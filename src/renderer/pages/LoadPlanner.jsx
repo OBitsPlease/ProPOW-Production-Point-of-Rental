@@ -186,6 +186,22 @@ export default function LoadPlanner() {
     })
   }, [selectedTruck])
 
+  // ── Multi-truck: undo for active slot (declared before Ctrl+Z useEffect to avoid TDZ) ──
+  const slotUndo = useCallback(() => {
+    const i = activeSlotIdx
+    const stack = slotUndoRefs.current[i] || []
+    if (stack.length === 0) return
+    const prev = stack[stack.length - 1]
+    slotUndoRefs.current[i] = stack.slice(0, -1)
+    setTruckSlots(slots => slots.map((s, idx) => {
+      if (idx !== i || !s.result) return s
+      const truck = trucks.find(t => t.id === s.truckId)
+      const newCallSheet = generateCallSheet(prev, truck)
+      const newStack = slotUndoRefs.current[i]
+      return { ...s, result: { ...s.result, packed: prev, callSheet: newCallSheet }, undoStack: newStack, hasManualOverrides: newStack.length > 0 }
+    }))
+  }, [activeSlotIdx, trucks])
+
   // ── Ctrl+Z undo (global, handles both single and multi-truck edit modes) ──
   useEffect(() => {
     const handleKeyDown = (e) => {
@@ -285,22 +301,6 @@ export default function LoadPlanner() {
     }))
   }, [trucks])
 
-  // ── Multi-truck: undo for active slot ───────────────────────────────────
-  const slotUndo = useCallback(() => {
-    const i = activeSlotIdx
-    const stack = slotUndoRefs.current[i] || []
-    if (stack.length === 0) return
-    const prev = stack[stack.length - 1]
-    slotUndoRefs.current[i] = stack.slice(0, -1)
-    setTruckSlots(slots => slots.map((s, idx) => {
-      if (idx !== i || !s.result) return s
-      const truck = trucks.find(t => t.id === s.truckId)
-      const newCallSheet = generateCallSheet(prev, truck)
-      const newStack = slotUndoRefs.current[i]
-      return { ...s, result: { ...s.result, packed: prev, callSheet: newCallSheet }, undoStack: newStack, hasManualOverrides: newStack.length > 0 }
-    }))
-  }, [activeSlotIdx, trucks])
-
   // ── Multi-truck: reset active slot to algorithm result ──────────────────
   const slotResetToAlgo = () => {
     setTruckSlots(prev => prev.map((s, i) => {
@@ -395,7 +395,7 @@ export default function LoadPlanner() {
         />
       )}
 
-      {/* RePack save modal */}}
+      {/* RePack save modal */}
       {repackModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
           <div className="bg-dark-800 border border-dark-600 rounded-xl shadow-2xl p-6 w-80">
