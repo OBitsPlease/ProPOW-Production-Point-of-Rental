@@ -317,12 +317,14 @@ export default function TruckViewer3D({ truck, packed, editMode, onBoxMoved }) {
   const [dragIsVertical, setDragIsVertical] = useState(false) // Shift = vertical mode
   const [dragPlaneY, setDragPlaneY] = useState(0)           // the plane's constant coordinate
   const [overlappingIds, setOverlappingIds] = useState(null) // Set of key strings
+  const [snapEnabled, setSnapEnabled] = useState(true)      // proximity snap toggle
 
   // Ref to avoid stale closure in drag handlers
   const dragBoxRef = useRef(null)
   const dragOffsetRef = useRef(null)
   const dragVertRef = useRef(false)
   const packedRef = useRef(packed)
+  const snapEnabledRef = useRef(true)
   useEffect(() => { packedRef.current = packed }, [packed])
 
   if (!truck) {
@@ -337,19 +339,21 @@ export default function TruckViewer3D({ truck, packed, editMode, onBoxMoved }) {
   const tw = truck.width * IN_TO_M
   const th = truck.height * IN_TO_M
 
-  // Snap position to 1-inch grid, clamped within truck bounds
+  // Snap position to 1-inch grid (when snap on), clamped within truck bounds
   const snapAndClamp = useCallback((box, rawX, rawY, rawZ) => {
-    const snap = 1 // 1 inch
-    let x = Math.round(rawX / snap) * snap
-    let y = Math.round(rawY / snap) * snap
-    let z = Math.round(rawZ / snap) * snap
-    x = Math.max(0, Math.min(truck.length - DOOR_CLEARANCE_IN - box.l, x))
+    const DOOR_CLEARANCE = 12
+    let x = rawX, y = rawY, z = rawZ
+    if (snapEnabledRef.current) {
+      const snap = 1 // 1 inch grid
+      x = Math.round(rawX / snap) * snap
+      y = Math.round(rawY / snap) * snap
+      z = Math.round(rawZ / snap) * snap
+    }
+    x = Math.max(0, Math.min(truck.length - DOOR_CLEARANCE - box.l, x))
     y = Math.max(0, Math.min(truck.width - box.w, y))
     z = Math.max(0, Math.min(truck.height - box.h, z))
     return { x, y, z }
   }, [truck])
-
-  const DOOR_CLEARANCE_IN = 12
 
   const handleDragStart = useCallback((e, box) => {
     if (!editMode) return
@@ -389,27 +393,50 @@ export default function TruckViewer3D({ truck, packed, editMode, onBoxMoved }) {
 
     const snapped = snapAndClamp(box, rawX, rawY, rawZ)
 
-    // For Shift+drag vertical: snap to nearest stacking level
-    if (isVert) {
-      const others = packedRef.current.filter(b =>
+    // Proximity snap to nearby case faces (only when snap is enabled)
+    if (snapEnabledRef.current) {
+      const snapOthers = packedRef.current.filter(b =>
         !(b.id === box.id && b.unitIndex === box.unitIndex)
       )
-      // Find top faces within footprint
-      const supportZ = others.reduce((best, b) => {
-        const footprintX = snapped.x < b.x + b.l - 0.5 && snapped.x + box.l > b.x + 0.5
-        const footprintY = snapped.y < b.y + b.w - 0.5 && snapped.y + box.w > b.y + 0.5
-        if (footprintX && footprintY) return Math.max(best, b.z + b.h)
-        return best
-      }, 0)
-      // Snap to floor or nearest top-face within 6 inches
-      const levels = [0, ...others.map(b => b.z + b.h)].sort((a, b) => a - b)
-      let bestLevel = snapped.z
-      let bestDist = Infinity
-      for (const lvl of levels) {
-        const d = Math.abs(snapped.z - lvl)
-        if (d < bestDist) { bestDist = d; bestLevel = lvl }
+      if (isVert) {
+        // Vertical mode: snap to nearest stacking level (top face of any case)
+        const levels = [0, ...snapOthers.map(b => b.z + b.h)].sort((a, b) => a - b)
+        let bestLevel = snapped.z
+        let bestDist = Infinity
+        for (const lvl of levels) {
+          const d = Math.abs(snapped.z - lvl)
+          if (d < bestDist) { bestDist = d; bestLevel = lvl }
+        }
+        snapped.z = bestLevel
+      } else {
+        // Floor mode: snap to adjacent case faces in X and Y
+        const SNAP_DIST = 8 // inches
+        for (const other of snapOthers) {
+          // X axis: snap left face of box to right face of other, or right to left, or align
+          const faces = [
+            { test: Math.abs(snapped.x - (other.x + other.l)), apply: () => { snapped.x = other.x + other.l } },
+            { test: Math.abs(snapped.x + box.l - other.x),    apply: () => { snapped.x = other.x - box.l } },
+            { test: Math.abs(snapped.x - other.x),            apply: () => { snapped.x = other.x } },
+            { test: Math.abs(snapped.x + box.l - (other.x + other.l)), apply: () => { snapped.x = other.x + other.l - box.l } },
+          ]
+          const bestX = faces.reduce((a, b) => a.test < b.test ? a : b)
+          if (bestX.test < SNAP_DIST) bestX.apply()
+          // Y axis
+          const facesY = [
+            { test: Math.abs(snapped.y - (other.y + other.w)), apply: () => { snapped.y = other.y + other.w } },
+            { test: Math.abs(snapped.y + box.w - other.y),    apply: () => { snapped.y = other.y - box.w } },
+            { test: Math.abs(snapped.y - other.y),            apply: () => { snapped.y = other.y } },
+            { test: Math.abs(snapped.y + box.w - (other.y + other.w)), apply: () => { snapped.y = other.y + other.w - box.w } },
+          ]
+          const bestY = facesY.reduce((a, b) => a.test < b.test ? a : b)
+          if (bestY.test < SNAP_DIST) bestY.apply()
+        }
+        // Re-clamp after proximity snap
+        snapped.x = Math.max(0, Math.min(truck.length - 12 - box.l, snapped.x))
+        snapped.y = Math.max(0, Math.min(truck.width - box.w, snapped.y))
       }
-      snapped.z = bestLevel
+    } else if (isVert) {
+      // Snap OFF in vertical mode: just keep z free (only truck bounds clamp from snapAndClamp)
     }
 
     // Overlap check
@@ -450,11 +477,28 @@ export default function TruckViewer3D({ truck, packed, editMode, onBoxMoved }) {
     <div className="relative w-full h-full flex flex-col">
       {/* Controls bar */}
       <div className="flex items-center gap-4 px-3 py-2 bg-dark-800 border-b border-dark-600 text-xs flex-wrap">
-        {/* Edit mode indicator */}
+        {/* Edit mode indicator + snap toggle */}
         {editMode && (
-          <div className="flex items-center gap-2 px-2 py-1 rounded-md bg-yellow-500/20 border border-yellow-500/40 text-yellow-400 font-semibold text-xs">
-            ✏️ Edit Mode — drag cases to reposition · Shift+drag = up/down · Ctrl+Z = undo
-          </div>
+          <>
+            <div className="flex items-center gap-2 px-2 py-1 rounded-md bg-yellow-500/20 border border-yellow-500/40 text-yellow-400 font-semibold text-xs">
+              ✏️ Edit Mode — drag cases to reposition · Shift+drag = up/down · Ctrl+Z = undo
+            </div>
+            <button
+              onClick={() => {
+                const next = !snapEnabled
+                setSnapEnabled(next)
+                snapEnabledRef.current = next
+              }}
+              title={snapEnabled ? 'Snap to cases: ON — click to disable' : 'Snap to cases: OFF — click to enable'}
+              className={`flex items-center gap-1.5 px-2 py-1 rounded border text-xs font-medium transition-colors ${
+                snapEnabled
+                  ? 'bg-blue-500/20 border-blue-500/50 text-blue-400'
+                  : 'border-dark-500 text-gray-500 hover:text-gray-300'
+              }`}
+            >
+              🧲 Snap {snapEnabled ? 'ON' : 'OFF'}
+            </button>
+          </>
         )}
 
         {!editMode && (

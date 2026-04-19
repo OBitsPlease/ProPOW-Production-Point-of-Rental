@@ -2,7 +2,7 @@
 
 **Production Point of Rental** — Concert Production warehouse management software, event booking calendar, address book, use barcode scanners, import inventory from excel, 3D visualizer and autoloader for most efficient truck loading of concert production gear, export truck pack call sheet and event info for crew.  This app is free to test during development.
 
-*v2.1.22 — April 2026*
+*v2.1.23 — April 2026*
 
 ---
 

@@ -1,9 +1,10 @@
 import { useEffect, useState, useCallback, useRef } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
-import { Play, Save, FileText, Plus, ChevronDown, AlertTriangle, CheckCircle2, Archive, DownloadCloud, Move, RotateCcw, Check } from 'lucide-react'
+import { Play, Save, FileText, Plus, ChevronDown, AlertTriangle, CheckCircle2, Archive, DownloadCloud, Move, RotateCcw, Check, Truck, Layers } from 'lucide-react'
 import { runBinPacking, generateCallSheet } from '../utils/binPacking'
 import { generateLoadPlanPDF } from '../utils/pdfReport'
 import TruckViewer3D from '../components/TruckViewer3D'
+import MultiTruckSetup from '../components/MultiTruckSetup'
 
 export default function LoadPlanner() {
   const { planId, eventId } = useParams()
@@ -25,9 +26,17 @@ export default function LoadPlanner() {
   const [algoResult, setAlgoResult] = useState(null) // original algorithm output, never mutated
   const [hasManualOverrides, setHasManualOverrides] = useState(false)
   const undoStackRef = useRef([])
+  const slotUndoRefs = useRef([]) // slotUndoRefs.current[i] = undo stack for slot i
   const [repackModal, setRepackModal] = useState(false)
   const [repackName, setRepackName] = useState('')
   const [repackSaving, setRepackSaving] = useState(false)
+
+  // Multi-truck state (event-based load planning)
+  const [multiSetupOpen, setMultiSetupOpen] = useState(false)
+  const [multiTruckMode, setMultiTruckMode] = useState(false)
+  // Each slot: { id, truckId, nickname, caseIds, result, algoResult, editMode, undoStack, hasManualOverrides }
+  const [truckSlots, setTruckSlots] = useState([])
+  const [activeSlotIdx, setActiveSlotIdx] = useState(0)
 
   const load = useCallback(async () => {
     if (!window.electronAPI) return
@@ -98,6 +107,11 @@ export default function LoadPlanner() {
   useEffect(() => { load() }, [load])
 
   const selectedTruck = trucks.find(t => t.id === parseInt(selectedTruckId) || t.id === selectedTruckId)
+
+  // Active slot computed values (multi-truck mode)
+  const activeSlot = multiTruckMode ? (truckSlots[activeSlotIdx] ?? null) : null
+  const activeSlotTruck = activeSlot ? trucks.find(t => t.id === activeSlot.truckId) : null
+  const activeSlotCases = activeSlot ? cases.filter(c => activeSlot.caseIds.includes(c.id)) : cases
 
   const runPacking = async () => {
     if (!selectedTruck || cases.length === 0) return
@@ -172,28 +186,33 @@ export default function LoadPlanner() {
     })
   }, [selectedTruck])
 
-  // ── Ctrl+Z undo (global, only active in edit mode) ───────────────────────
+  // ── Ctrl+Z undo (global, handles both single and multi-truck edit modes) ──
   useEffect(() => {
     const handleKeyDown = (e) => {
-      if ((e.metaKey || e.ctrlKey) && e.key === 'z' && editMode) {
-        e.preventDefault()
-        const stack = undoStackRef.current
-        if (stack.length === 0) return
-        const prev = stack[stack.length - 1]
-        const newStack = stack.slice(0, -1)
-        undoStackRef.current = newStack
-        setUndoStack(newStack)
-        setResult(r => {
-          if (!r) return r
-          const newCallSheet = generateCallSheet(prev, selectedTruck)
-          return { ...r, packed: prev, callSheet: newCallSheet }
-        })
-        if (newStack.length === 0) setHasManualOverrides(false)
+      if (!(e.metaKey || e.ctrlKey) || e.key !== 'z') return
+      e.preventDefault()
+      if (multiTruckMode) {
+        const slot = truckSlots[activeSlotIdx]
+        if (slot?.editMode) slotUndo()
+        return
       }
+      if (!editMode) return
+      const stack = undoStackRef.current
+      if (stack.length === 0) return
+      const prev = stack[stack.length - 1]
+      const newStack = stack.slice(0, -1)
+      undoStackRef.current = newStack
+      setUndoStack(newStack)
+      setResult(r => {
+        if (!r) return r
+        const newCallSheet = generateCallSheet(prev, selectedTruck)
+        return { ...r, packed: prev, callSheet: newCallSheet }
+      })
+      if (newStack.length === 0) setHasManualOverrides(false)
     }
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [editMode, selectedTruck])
+  }, [editMode, selectedTruck, multiTruckMode, truckSlots, activeSlotIdx, slotUndo])
 
   const resetToAlgo = () => {
     if (!algoResult) return
@@ -201,6 +220,101 @@ export default function LoadPlanner() {
     setUndoStack([])
     undoStackRef.current = []
     setHasManualOverrides(false)
+  }
+
+  // ── Multi-truck: run packing for all slots ──────────────────────────────
+  const runPackingAllSlots = async () => {
+    if (truckSlots.length === 0) return
+    setRunning(true)
+    await new Promise(r => setTimeout(r, 50))
+    try {
+      let stackPrefs = []
+      if (window.electronAPI?.stackPrefs) {
+        try { stackPrefs = await window.electronAPI.stackPrefs.getAll() } catch(e) {}
+      }
+      const newSlots = truckSlots.map((slot, i) => {
+        const truck = trucks.find(t => t.id === slot.truckId)
+        const slotCases = cases.filter(c => slot.caseIds.includes(c.id))
+        if (!truck) return { ...slot, result: null, algoResult: null }
+        const r = runBinPacking(slotCases, truck, stackPrefs)
+        slotUndoRefs.current[i] = []
+        return { ...slot, result: r, algoResult: r, editMode: false, undoStack: [], hasManualOverrides: false }
+      })
+      setTruckSlots(newSlots)
+    } finally {
+      setRunning(false)
+    }
+  }
+
+  // ── Multi-truck: box moved in a slot ────────────────────────────────────
+  const handleSlotBoxMoved = useCallback((slotIdx, movedBox) => {
+    setTruckSlots(prev => prev.map((s, i) => {
+      if (i !== slotIdx || !s.result) return s
+      const truck = trucks.find(t => t.id === s.truckId)
+      const snapshot = s.result.packed.map(b => ({ ...b }))
+      const newStack = [...(slotUndoRefs.current[slotIdx] || []), snapshot].slice(-50)
+      slotUndoRefs.current[slotIdx] = newStack
+      const newPacked = s.result.packed.map(b =>
+        (b.id === movedBox.id && b.unitIndex === movedBox.unitIndex)
+          ? { ...b, x: movedBox.x, y: movedBox.y, z: movedBox.z }
+          : b
+      )
+      const sorted = [...newPacked].sort((a, bx) => {
+        if (Math.abs(a.x - bx.x) > 1) return bx.x - a.x
+        if (Math.abs(a.z - bx.z) > 1) return a.z - bx.z
+        return a.y - bx.y
+      })
+      sorted.forEach((b, idx) => { b.loadOrder = idx + 1 })
+      // Save global stack pref when a case is stacked on another
+      if (movedBox.z > 0.5 && window.electronAPI?.stackPrefs) {
+        const others = newPacked.filter(b => !(b.id === movedBox.id && b.unitIndex === movedBox.unitIndex))
+        const below = others.filter(b =>
+          Math.abs((b.z + b.h) - movedBox.z) < 1 &&
+          movedBox.x < b.x + b.l - 0.5 && movedBox.x + movedBox.l > b.x + 0.5 &&
+          movedBox.y < b.y + b.w - 0.5 && movedBox.y + movedBox.w > b.y + 0.5
+        )
+        for (const b of below) {
+          window.electronAPI.stackPrefs.save({
+            bottom_case_id: b.id, top_case_id: movedBox.id,
+            bottom_name: b.name, top_name: movedBox.name,
+          }).catch(() => {})
+        }
+      }
+      const newCallSheet = generateCallSheet(sorted, truck)
+      return { ...s, result: { ...s.result, packed: sorted, callSheet: newCallSheet }, undoStack: newStack, hasManualOverrides: true }
+    }))
+  }, [trucks])
+
+  // ── Multi-truck: undo for active slot ───────────────────────────────────
+  const slotUndo = useCallback(() => {
+    const i = activeSlotIdx
+    const stack = slotUndoRefs.current[i] || []
+    if (stack.length === 0) return
+    const prev = stack[stack.length - 1]
+    slotUndoRefs.current[i] = stack.slice(0, -1)
+    setTruckSlots(slots => slots.map((s, idx) => {
+      if (idx !== i || !s.result) return s
+      const truck = trucks.find(t => t.id === s.truckId)
+      const newCallSheet = generateCallSheet(prev, truck)
+      const newStack = slotUndoRefs.current[i]
+      return { ...s, result: { ...s.result, packed: prev, callSheet: newCallSheet }, undoStack: newStack, hasManualOverrides: newStack.length > 0 }
+    }))
+  }, [activeSlotIdx, trucks])
+
+  // ── Multi-truck: reset active slot to algorithm result ──────────────────
+  const slotResetToAlgo = () => {
+    setTruckSlots(prev => prev.map((s, i) => {
+      if (i !== activeSlotIdx || !s.algoResult) return s
+      slotUndoRefs.current[i] = []
+      return { ...s, result: s.algoResult, undoStack: [], hasManualOverrides: false }
+    }))
+  }
+
+  // ── Multi-truck: toggle edit mode for active slot ───────────────────────
+  const toggleSlotEditMode = () => {
+    setTruckSlots(prev => prev.map((s, i) =>
+      i === activeSlotIdx ? { ...s, editMode: !s.editMode } : s
+    ))
   }
 
   const savePlan = async () => {
@@ -265,7 +379,23 @@ export default function LoadPlanner() {
 
   return (
     <div className="flex h-full overflow-hidden">
-      {/* RePack save modal */}
+      {/* Multi-truck setup modal */}
+      {multiSetupOpen && (
+        <MultiTruckSetup
+          trucks={trucks}
+          cases={cases}
+          onCancel={() => setMultiSetupOpen(false)}
+          onConfirm={(slots) => {
+            setTruckSlots(slots.map(s => ({ ...s, result: null, algoResult: null, editMode: false, undoStack: [], hasManualOverrides: false })))
+            slotUndoRefs.current = slots.map(() => [])
+            setActiveSlotIdx(0)
+            setMultiTruckMode(true)
+            setMultiSetupOpen(false)
+          }}
+        />
+      )}
+
+      {/* RePack save modal */}}
       {repackModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
           <div className="bg-dark-800 border border-dark-600 rounded-xl shadow-2xl p-6 w-80">
@@ -307,7 +437,9 @@ export default function LoadPlanner() {
             placeholder="Plan name..."
           />
 
-          {/* Truck selector */}
+          {/* Truck selector (single-truck mode only) */}
+          {!multiTruckMode && (
+            <>
           <label className="label">Truck Profile</label>
           <div className="relative">
             <select
@@ -327,18 +459,79 @@ export default function LoadPlanner() {
               {selectedTruck.max_weight && ` • Max ${selectedTruck.max_weight.toLocaleString()} lbs`}
             </div>
           )}
+            </>
+          )}
+
+          {/* Multi-truck mode header */}
+          {multiTruckMode && (
+            <div className="bg-dark-700 border border-blue-500/30 rounded-lg p-2.5">
+              <div className="flex items-center justify-between mb-1.5">
+                <div className="flex items-center gap-1.5 text-blue-400 text-xs font-semibold">
+                  <Layers size={12} /> Multi-Truck Mode
+                </div>
+                <button
+                  onClick={() => setMultiSetupOpen(true)}
+                  className="text-xs text-gray-500 hover:text-gray-300 hover:bg-dark-600 px-2 py-0.5 rounded transition-colors"
+                >Reconfigure</button>
+              </div>
+              <div className="space-y-0.5">
+                {truckSlots.map((slot, i) => {
+                  const t = trucks.find(tr => tr.id === slot.truckId)
+                  return (
+                    <button
+                      key={i}
+                      onClick={() => setActiveSlotIdx(i)}
+                      className={`w-full text-left flex items-center gap-2 px-2 py-1 rounded text-xs transition-colors ${
+                        i === activeSlotIdx ? 'bg-blue-500/20 text-white' : 'text-gray-400 hover:bg-dark-600'
+                      }`}
+                    >
+                      <Truck size={10} />
+                      <span className="flex-1 truncate">{slot.nickname}</span>
+                      <span className="text-gray-500">{slot.caseIds.length} cases</span>
+                      {slot.result && (
+                        <span className={`font-mono ${
+                          slot.result.utilization >= 80 ? 'text-green-400' :
+                          slot.result.utilization >= 50 ? 'text-yellow-400' : 'text-gray-500'
+                        }`}>{slot.result.utilization}%</span>
+                      )}
+                    </button>
+                  )
+                })}
+              </div>
+            </div>
+          )}
+
+          {/* Multi-truck launch button (event mode only) */}
+          {eventId && !multiTruckMode && (
+            <button
+              onClick={() => setMultiSetupOpen(true)}
+              className="mt-2 w-full flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-medium border border-blue-500/40 text-blue-400 hover:bg-blue-500/10 transition-colors"
+            >
+              <Layers size={12} /> Use Multiple Trucks...
+            </button>
+          )}
         </div>
 
-        {/* Cases summary */}
+          {/* Cases summary */}
         <div className="p-4 border-b border-dark-600">
           <div className="flex items-center justify-between mb-2">
-            <span className="text-gray-400 text-sm font-medium">Cases ({cases.length})</span>
+            <span className="text-gray-400 text-sm font-medium">
+              {multiTruckMode
+                ? `${activeSlot?.nickname ?? 'Truck'} Cases (${activeSlotCases.length})`
+                : `Cases (${cases.length})`
+              }
+            </span>
           </div>
           <div className="space-y-1 max-h-48 overflow-y-auto">
-            {cases.length === 0 ? (
-              <p className="text-gray-600 text-xs">{eventId ? 'No cases added to this event — add cases in the event gear list first' : 'No cases — go to Items page to create cases'}</p>
+            {(multiTruckMode ? activeSlotCases : cases).length === 0 ? (
+              <p className="text-gray-600 text-xs">
+                {multiTruckMode
+                  ? 'No cases assigned to this truck'
+                  : eventId ? 'No cases added to this event — add cases in the event gear list first' : 'No cases — go to Items page to create cases'
+                }
+              </p>
             ) : (
-              cases.map(c => (
+              (multiTruckMode ? activeSlotCases : cases).map(c => (
                 <div key={c.id} className="flex items-center gap-2 text-xs text-gray-300">
                   <span
                     className="w-2 h-2 rounded-full shrink-0"
@@ -357,12 +550,12 @@ export default function LoadPlanner() {
         {/* Actions */}
         <div className="p-4 space-y-2">
           <button
-            onClick={runPacking}
-            disabled={!selectedTruck || cases.length === 0 || running}
+            onClick={multiTruckMode ? runPackingAllSlots : runPacking}
+            disabled={(multiTruckMode ? truckSlots.length === 0 : (!selectedTruck || cases.length === 0)) || running}
             className="btn-primary w-full justify-center disabled:opacity-40 disabled:cursor-not-allowed"
           >
             <Play size={14} />
-            {running ? 'Calculating...' : 'Calculate Load'}
+            {running ? 'Calculating...' : multiTruckMode ? 'Calculate All Trucks' : 'Calculate Load'}
           </button>
 
           {result && (
@@ -465,23 +658,57 @@ export default function LoadPlanner() {
 
       {/* 3D View */}
       <div className="flex-1 overflow-hidden flex flex-col">
-        {result && (
+        {/* Truck tabs (multi-truck mode) */}
+        {multiTruckMode && (
+          <div className="flex items-center gap-0 border-b border-dark-600 bg-dark-900 px-2 pt-1 overflow-x-auto">
+            {truckSlots.map((slot, i) => (
+              <button
+                key={i}
+                onClick={() => setActiveSlotIdx(i)}
+                className={`flex items-center gap-1.5 px-4 py-2 text-xs font-medium border-b-2 transition-colors whitespace-nowrap shrink-0 ${
+                  i === activeSlotIdx
+                    ? 'border-blue-400 text-white bg-dark-800'
+                    : 'border-transparent text-gray-500 hover:text-gray-300 hover:bg-dark-700'
+                }`}
+              >
+                <Truck size={11} />
+                {slot.nickname}
+                {slot.result != null && (
+                  <span className={`ml-1 ${
+                    slot.result.utilization >= 80 ? 'text-green-400' :
+                    slot.result.utilization >= 50 ? 'text-yellow-400' : 'text-gray-500'
+                  }`}>{slot.result.utilization}%</span>
+                )}
+                {slot.hasManualOverrides && <span className="text-yellow-400 ml-0.5">✏</span>}
+              </button>
+            ))}
+            <button
+              onClick={() => { setMultiTruckMode(false); setTruckSlots([]) }}
+              className="ml-auto text-xs text-gray-600 hover:text-red-400 px-2 py-1 shrink-0"
+              title="Exit multi-truck mode"
+            >✕ Single Truck</button>
+          </div>
+        )}
+
+        {/* Edit mode toolbar */}
+        {(multiTruckMode ? activeSlot?.result : result) && (
           <div className="flex items-center gap-2 px-3 py-1.5 bg-dark-800 border-b border-dark-600 text-xs">
             <button
-              onClick={() => setEditMode(m => !m)}
+              onClick={multiTruckMode ? toggleSlotEditMode : () => setEditMode(m => !m)}
               className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium border transition-colors ${
-                editMode
+                (multiTruckMode ? activeSlot?.editMode : editMode)
                   ? 'bg-yellow-500/20 border-yellow-500/60 text-yellow-400 hover:bg-yellow-500/30'
                   : 'border-dark-500 text-gray-400 hover:text-gray-200 hover:bg-dark-600'
               }`}
             >
-              <Move size={12} /> {editMode ? 'Exit Edit Mode' : 'Edit Layout'}
+              <Move size={12} /> {(multiTruckMode ? activeSlot?.editMode : editMode) ? 'Exit Edit Mode' : 'Edit Layout'}
             </button>
-            {editMode && (
+            {(multiTruckMode ? activeSlot?.editMode : editMode) && (
               <>
                 <span className="text-gray-600">|</span>
                 <button
                   onClick={() => {
+                    if (multiTruckMode) { slotUndo(); return }
                     const stack = undoStackRef.current
                     if (stack.length === 0) return
                     const prev = stack[stack.length - 1]
@@ -495,21 +722,21 @@ export default function LoadPlanner() {
                     })
                     if (newStack.length === 0) setHasManualOverrides(false)
                   }}
-                  disabled={undoStack.length === 0}
+                  disabled={multiTruckMode ? (activeSlot?.undoStack?.length ?? 0) === 0 : undoStack.length === 0}
                   className="flex items-center gap-1 px-2 py-1 rounded text-xs text-gray-400 hover:text-gray-200 hover:bg-dark-600 disabled:opacity-30 disabled:cursor-not-allowed"
                 >
                   <RotateCcw size={11} /> Undo
                 </button>
-                {hasManualOverrides && (
+                {(multiTruckMode ? activeSlot?.hasManualOverrides : hasManualOverrides) && (
                   <>
                     <button
-                      onClick={() => { setEditMode(false) }}
+                      onClick={() => { multiTruckMode ? toggleSlotEditMode() : setEditMode(false) }}
                       className="flex items-center gap-1 px-2 py-1 rounded text-xs bg-green-500/20 border border-green-500/40 text-green-400 hover:bg-green-500/30"
                     >
                       <Check size={11} /> Apply Changes
                     </button>
                     <button
-                      onClick={resetToAlgo}
+                      onClick={multiTruckMode ? slotResetToAlgo : resetToAlgo}
                       className="flex items-center gap-1 px-2 py-1 rounded text-xs text-gray-500 hover:text-red-400 hover:bg-dark-600"
                     >
                       Reset to Algorithm
@@ -518,12 +745,33 @@ export default function LoadPlanner() {
                 )}
               </>
             )}
-            {hasManualOverrides && !editMode && (
+            {(multiTruckMode ? activeSlot?.hasManualOverrides && !activeSlot?.editMode : hasManualOverrides && !editMode) && (
               <span className="text-yellow-500/80 text-xs">✏ Manual overrides active</span>
             )}
           </div>
         )}
-        {result ? (
+
+        {/* 3D viewer */}
+        {multiTruckMode ? (
+          activeSlot?.result ? (
+            <div className="flex-1 overflow-hidden">
+              <TruckViewer3D
+                key={activeSlotIdx}
+                truck={activeSlotTruck}
+                packed={activeSlot.result.packed}
+                editMode={activeSlot.editMode}
+                onBoxMoved={(box) => handleSlotBoxMoved(activeSlotIdx, box)}
+              />
+            </div>
+          ) : (
+            <div className="flex flex-col items-center justify-center h-full text-gray-600 gap-3">
+              <div className="text-5xl opacity-20">🚛</div>
+              <p className="font-medium">
+                {truckSlots.length === 0 ? 'Configure trucks above' : `Click "Calculate All Trucks" to load ${activeSlot?.nickname ?? 'this truck'}`}
+              </p>
+            </div>
+          )
+        ) : result ? (
           <div className="flex-1 overflow-hidden">
             <TruckViewer3D
               truck={selectedTruck}
